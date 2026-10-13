@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from learngraph_lite.application.agent import AgentLoop, RunRequest
 from learngraph_lite.application.learning import LearningService
@@ -18,6 +19,12 @@ class LessonState:
     failed_explanations: set[tuple[str, str]] = field(default_factory=set)
 
 
+class LessonRepository(Protocol):
+    def state(self, goal_id: str) -> LessonState: ...
+
+    def save(self, goal_id: str, state: LessonState) -> None: ...
+
+
 @dataclass
 class InMemoryLessonRepository:
     _states: dict[str, LessonState] = field(default_factory=dict)
@@ -25,9 +32,12 @@ class InMemoryLessonRepository:
     def state(self, goal_id: str) -> LessonState:
         return self._states.setdefault(goal_id, LessonState())
 
+    def save(self, goal_id: str, state: LessonState) -> None:
+        self._states[goal_id] = state
+
 
 class LessonService:
-    def __init__(self, repository: InMemoryLessonRepository, learning: LearningService, loop: AgentLoop):
+    def __init__(self, repository: LessonRepository, learning: LearningService, loop: AgentLoop):
         self._repository = repository
         self._learning = learning
         self._loop = loop
@@ -42,6 +52,7 @@ class LessonService:
             markdown=package.markdown,
             components=package.components,
         )
+        self._repository.save(package.goal_id, state)
         return state.packages[package.id]
 
     def ack_event(self, goal_id: str, event: LessonEvent) -> LessonEvent:
@@ -54,6 +65,7 @@ class LessonService:
             raise ValueError("unknown lesson package")
         accepted = ack_event(package, event)
         state.events[event.id] = accepted
+        self._repository.save(goal_id, state)
         return accepted
 
     def submit_choice_answer(self, goal_id: str, exercise_id: str, selected_option_id: str, attempt_id: str) -> Attempt:
@@ -78,6 +90,8 @@ class LessonService:
         if record.status == "completed":
             state.explanation_runs[key] = record.run_id
             state.failed_explanations.discard(key)
+            self._repository.save(goal_id, state)
             return record.run_id
         state.failed_explanations.add(key)
+        self._repository.save(goal_id, state)
         raise RuntimeError(record.error or "explanation run failed")

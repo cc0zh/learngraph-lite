@@ -11,8 +11,10 @@ from pathlib import Path
 
 from learngraph_lite.application.documents import ChunkSearchResult
 from learngraph_lite.application.learning import LearningState
+from learngraph_lite.application.lessons import LessonState
 from learngraph_lite.application.planning import PlanningState
 from learngraph_lite.domain.documents import Citation, Document, DocumentChunk, tokenize
+from learngraph_lite.domain.lessons import ComponentKind, LessonComponent, LessonEvent, LessonPackage
 from learngraph_lite.domain.learning import Attempt, ExerciseOption, ExercisePrivate, GoalDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus
 
 
@@ -509,6 +511,205 @@ class SQLiteLearningRepository:
                         counted integer not null,
                         created_at text not null,
                         primary key(goal_id, attempt_id)
+                    )
+                    """
+                )
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._database_path)
+
+
+class SQLiteLessonRepository:
+    """Persist declarative lesson packages, events and explanation idempotency."""
+
+    def __init__(self, database_path: str | Path):
+        self._database_path = str(database_path)
+        self._initialize()
+
+    def state(self, goal_id: str) -> LessonState:
+        with closing(self._connect()) as connection:
+            package_rows = connection.execute(
+                """
+                select package_id, node_id, graph_content_revision, markdown, components_json
+                from lesson_packages
+                where goal_id = ?
+                order by package_id
+                """,
+                (goal_id,),
+            ).fetchall()
+            event_rows = connection.execute(
+                """
+                select event_id, package_id, component_id, action, payload_json
+                from lesson_events
+                where goal_id = ?
+                order by event_id
+                """,
+                (goal_id,),
+            ).fetchall()
+            explanation_rows = connection.execute(
+                """
+                select event_id, slot, run_id, failed
+                from lesson_explanations
+                where goal_id = ?
+                order by event_id, slot
+                """,
+                (goal_id,),
+            ).fetchall()
+        packages = {
+            row[0]: LessonPackage(
+                id=row[0],
+                goal_id=goal_id,
+                node_id=row[1],
+                graph_content_revision=int(row[2]),
+                markdown=row[3],
+                components=tuple(
+                    LessonComponent(id=item["id"], kind=ComponentKind(item["kind"]), props=dict(item["props"]))
+                    for item in json.loads(row[4])
+                ),
+            )
+            for row in package_rows
+        }
+        events = {
+            row[0]: LessonEvent(
+                id=row[0],
+                package_id=row[1],
+                component_id=row[2],
+                action=row[3],
+                payload=dict(json.loads(row[4])),
+            )
+            for row in event_rows
+        }
+        explanation_runs = {
+            (row[0], row[1]): row[2]
+            for row in explanation_rows
+            if row[2] is not None and not bool(row[3])
+        }
+        failed_explanations = {
+            (row[0], row[1])
+            for row in explanation_rows
+            if bool(row[3])
+        }
+        return LessonState(
+            packages=packages,
+            events=events,
+            explanation_runs=explanation_runs,
+            failed_explanations=failed_explanations,
+        )
+
+    def save(self, goal_id: str, state: LessonState) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute("delete from lesson_packages where goal_id = ?", (goal_id,))
+                connection.execute("delete from lesson_events where goal_id = ?", (goal_id,))
+                connection.execute("delete from lesson_explanations where goal_id = ?", (goal_id,))
+                connection.executemany(
+                    """
+                    insert into lesson_packages(
+                        goal_id,
+                        package_id,
+                        node_id,
+                        graph_content_revision,
+                        markdown,
+                        components_json
+                    )
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            goal_id,
+                            package.id,
+                            package.node_id,
+                            package.graph_content_revision,
+                            package.markdown,
+                            json.dumps(
+                                [
+                                    {
+                                        "id": component.id,
+                                        "kind": component.kind.value,
+                                        "props": component.props,
+                                    }
+                                    for component in package.components
+                                ],
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            ),
+                        )
+                        for package in state.packages.values()
+                    ),
+                )
+                connection.executemany(
+                    """
+                    insert into lesson_events(goal_id, event_id, package_id, component_id, action, payload_json)
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            goal_id,
+                            event.id,
+                            event.package_id,
+                            event.component_id,
+                            event.action,
+                            json.dumps(event.payload, ensure_ascii=False, sort_keys=True),
+                        )
+                        for event in state.events.values()
+                    ),
+                )
+                explanation_keys = set(state.explanation_runs) | state.failed_explanations
+                connection.executemany(
+                    """
+                    insert into lesson_explanations(goal_id, event_id, slot, run_id, failed)
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            goal_id,
+                            event_id,
+                            slot,
+                            state.explanation_runs.get((event_id, slot)),
+                            1 if (event_id, slot) in state.failed_explanations else 0,
+                        )
+                        for event_id, slot in sorted(explanation_keys)
+                    ),
+                )
+
+    def _initialize(self) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    create table if not exists lesson_packages (
+                        goal_id text not null,
+                        package_id text not null,
+                        node_id text not null,
+                        graph_content_revision integer not null,
+                        markdown text not null,
+                        components_json text not null,
+                        primary key(goal_id, package_id)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    create table if not exists lesson_events (
+                        goal_id text not null,
+                        event_id text not null,
+                        package_id text not null,
+                        component_id text not null,
+                        action text not null,
+                        payload_json text not null,
+                        primary key(goal_id, event_id)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    create table if not exists lesson_explanations (
+                        goal_id text not null,
+                        event_id text not null,
+                        slot text not null,
+                        run_id text,
+                        failed integer not null,
+                        primary key(goal_id, event_id, slot)
                     )
                     """
                 )

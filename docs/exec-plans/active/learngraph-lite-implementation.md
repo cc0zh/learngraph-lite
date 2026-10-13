@@ -20,7 +20,7 @@
 - [x] M2：目标澄清、确认、图谱草稿/编辑/发布、revision、规划离线 E2E 与 planning state 最小 SQLite 持久化。
 - [x] M3：节点 Agent 学习、单选题生成、服务端判分、进度、下一步离线闭环与 learning state 最小 SQLite 持久化。
 - [x] M4A：TXT/Markdown 文档解析、分块、简单中英文检索、绑定、引用定位、空召回离线切片与 SQLite FTS5 最小适配器。
-- [x] M4B：声明式学习页、固定组件、事件 ACK、解释任务幂等离线切片。
+- [x] M4B：声明式学习页、固定组件、事件 ACK、解释任务幂等离线切片与 lesson state 最小 SQLite 持久化。
 - [x] M4C：图谱提案、差异审核、接受/拒绝、base_revision 冲突离线切片。
 - [ ] M5：全量回归、真实模型 smoke、20 例评估集与演示交接；已完成 20 例离线 fixture 评估集、可生成报告脚本和可复现 fixture demo，真实模型 smoke 与浏览器演示交接仍待完成。
 - 2026-10-13：采用轻量 Python 分层骨架先完成 M0/M1 离线可验证切片；FastAPI/React/SQLite 仍按后续阶段引入，避免在模板态一次性拉入未验证依赖。
@@ -36,6 +36,7 @@
 - 2026-10-13：SQLite planning persistence 最小切片完成 `SQLitePlanningRepository`，用标准库 sqlite3 持久化目标草稿、澄清轮次和当前图谱快照，验证重新实例化 repository 后可恢复已确认目标与已发布图谱；完整业务 SQLite schema、迁移、练习/资料/事件持久化仍待后续接入。
 - 2026-10-13：SQLite document retrieval 最小切片完成 `SQLiteDocumentRepository`，持久化文本资料、chunk、目标/节点绑定和引用定位，并用 FTS5 索引现有 `tokenize()` 结果支持中英文检索；真实 PDF 二进制解析、前端原文页、完整业务持久化仍待后续接入。
 - 2026-10-13：SQLite learning persistence 最小切片完成 `SQLiteLearningRepository`，持久化学习图谱、私有练习、作答和节点学习请求幂等结果，验证重新实例化 repository 后可恢复掌握度、下一步推荐和同题重答计分规则；学习页事件、运行生命周期和完整业务 schema 仍待后续接入。
+- 2026-10-13：SQLite lesson persistence 最小切片完成 `SQLiteLessonRepository`，持久化 lesson package、事件 ACK、解释 run 和失败重试状态，验证重新实例化 repository 后可恢复事件幂等和解释重试；React 固定组件渲染器、HTTP ACK 路由、浏览器 E2E 和完整业务 schema 仍待后续接入。
 
 ## 验收与交接
 
@@ -68,13 +69,17 @@
   - python scripts/check-python-boundaries.py：SQLite learning persistence 切片通过，输出 Python import boundaries passed。
   - npm.cmd run check:docs：SQLite learning persistence 切片通过，输出文档骨架检查通过。
   - npm.cmd run ci：SQLite learning persistence 切片通过，包含 Python 边界检查、45 个 Python 测试和 19 个 Node 模板工具测试。
+  - python scripts/run-python-tests.py：SQLite lesson persistence 切片通过，47 Python tests passed。
+  - python scripts/check-python-boundaries.py：SQLite lesson persistence 切片通过，输出 Python import boundaries passed。
+  - npm.cmd run check:docs：SQLite lesson persistence 切片通过，输出文档骨架检查通过。
+  - npm.cmd run ci：SQLite lesson persistence 切片通过，包含 Python 边界检查、47 个 Python 测试和 19 个 Node 模板工具测试。
 - 未执行的检查、阻塞和遗留事项：
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
-  - FastAPI/React/P1 功能尚未实现；SQLite 目前只覆盖 planning state、document retrieval 与 learning state 的最小 repository，不代表完整业务持久化。
+  - FastAPI/React/P1 功能尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
   - M1 真实 HTTP/SSE 路由测试未执行；当前只验证应用层生命周期与 presentation SSE 编码，不声称已完成 FastAPI 路由。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析和前端原文页未实现。
-  - M4B 当前只有后端声明式包与事件用例；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
+  - M4B 当前已完成后端声明式包、事件用例和 SQLite 最小持久化；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
   - fixture demo 不是浏览器录屏或真实模型演示；M5 仍需真实模型 smoke 与最终演示交接材料。
 - 必要的复验方式：
   - python scripts/run-python-tests.py
