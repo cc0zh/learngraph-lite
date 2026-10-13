@@ -143,3 +143,17 @@
 - 验证：`npm.cmd run ci` 通过（72 Python + 19 Node）；`eval:offline` 通过 20/20；`demo:learning-agent`、`demo:fixture`、`smoke:fixture` 通过；`git diff --check` 通过。真实供应商 smoke/demo 未运行。
 - 修复与收敛：首次 Python 回归发现 HTTP 递归删去来源中的 `page_number:null`，与 SSE 不一致；改用 exclude_unset 后 72 项全通过。只新增 6 个聚合行为测试，覆盖检索/参数修复/稳定来源、无资料/空召回、变更/解绑、并发、HTTP/SSE/定位、结果投影取消/异常/预算，复用既有生命周期与 SDK 测试。
 - 范围边界：本切片不完成 PDF/上传解析、jieba/BM25 升级、图谱/出题/学习页 grounding、React 或真实供应商评测；总体计划保持 active。
+
+## 练习生成与共享调用预算切片（已完成）
+
+- 原因：现有出题仅为 fixture，直接任务与工具内模型调用尚未共享预算；新增真正调用 ModelGateway 的结构化生成用例，贯通生成、私有答案保存、公共题目与确定性作答。
+- [x] BudgetedModelGateway 统一计数与 usage，Runner/工具内部生成/至多一次修复共用父 run 预算；直接任务接入同一 Loop 生命周期。
+- [x] GenerateExercise 复用 Pydantic 与现有领域规则；稳定 operation key、原子保存、当前内容版本校验、公共/私有字段隔离。按钮和教学工具调用同一用例。
+- [x] HTTP 生成/题目读取/作答接入已有 SQLite；验证共享预算、修复失败不保存、取消、幂等冲突、并发与答案隔离。教学工具仅在明确教学模式开放，资料问答沿用只读集合。
+- [x] 更新 demo、文档/history/learning，执行 CI/离线评估并提交。
+- 范围：本切片先生成明确标为“非基于上传资料”的练习；资料型练习 grounding、图谱规划完整 HTTP、会话持久化、React 与真实供应商证据继续留在总计划。
+- 验证：`npm.cmd run ci` 通过（78 Python + 19 Node、文档/仓库/Action 检查与 Python import 边界）；`eval:offline` 为 20/20；`demo:fixture`、`smoke:fixture` 通过；`demo:learning-agent` 修复时间序列化后通过。既有 shutdown graceful timeout/ASGI CancelledError 与 TestClient 弃用提示仍出现，退出码为 0。真实供应商 smoke/demo 未运行。
+- 失败记录：首次新测试因复用原 session/request 请求缺失节点而得到幂等冲突 409，改为独立 request ID 后验证 404；独立 demo 暴露新增反馈 datetime 不能 JSON 序列化，改为 ISO 时间并在原 demo 测试中验证整个输出可序列化。
+- 修复后验证：定向 `uv run python -c` 先遇缓存权限，获准后因没有设置 src import path 而失败；改回项目正式 `npm.cmd run test:py`，78 项通过。demo 命令、文档骨架与 diff 检查均通过；未重新运行与最终序列化修复无关的 Node/eval。
+- 测试收敛：新增六个聚合行为测试，覆盖直接/工具共用预算、一次修复、失败无半批、六次成功/第七次阻止、retry 复用/新 root、SQLite 竞争及冲突、取消/规划变化、HTTP/SSE 公共投影与并发首答；复用现有生命周期、SDK 与领域规则测试。SQLite registry 使用独立复合主键，模型调用不持有事务。
+- 限制：只实现调用/步骤/工具次数与协作取消，尚无 token/context/deadline；run/root 关联仅内存，不能通过旧 run ID 跨进程 retry；planning/learning 无跨仓库事务，保存前重读不能消除并发规划变更的窄窗口。整体计划仍 active。

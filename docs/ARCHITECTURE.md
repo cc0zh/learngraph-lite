@@ -58,4 +58,10 @@ SSE 原子捕获运行快照与事件序号，从该序号后等待新事件；�
 
 Uvicorn 先等待 HTTP/SSE 连接结束才触发 lifespan shutdown，本地启动命令设置 2 秒 graceful shutdown，避免活跃 SSE 无限挡住生命周期关闭。其他启动器也需设置有限的连接关闭等待时间。随后 lifespan 会停止准入、取消活动 run 并等待工作线程退出；同步阻塞模型/工具必须自行设置有限超时，Python 线程无法强行打断供应商调用。
 
-此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配 planning/learning/document 只读场景；练习生成和写入业务工具、上传/PDF、完整规划/练习 HTTP 与 React 继续按总计划实施。
+此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配 planning/learning/document 场景和练习生成/作答；上传/PDF、完整规划 HTTP、学习页/提案 HTTP 与 React 继续按总计划实施。
+
+`BudgetedModelGateway` 位于通用内核，为一次 run 的所有模型请求计数并累积 usage。Runner 复用同一包装器，教学工具和直接生成用例使用父 run 的 gateway；包装器禁止切换预算，避免重复计数。默认模型调用上限六次，JSON 修复最多一次且计入次数。当前尚无 token/context/deadline 控制；供应商网络 timeout 不等于 run deadline。
+
+`GenerateExercise` 位于 application：请求结构化候选，经严格 schema 和现有领域规则校验，生成服务端题目 ID，再通过 learning repository `mutate` 原子保存整批私有题目和 operation。模型调用在事务外，保存前重读规划版本，事务内检查最新学习图谱、取消和重复题。SQLite 使用 `BEGIN IMMEDIATE` 与 `learning_generation_operations` 的 `(goal_id, operation_key)` 主键；首次作答和 submission 去重也在同一学习事务完成。planning/learning 分别读取仍留下并发规划变更的窄窗口，后续需统一同步协议。
+
+按钮 `mode=exercise` 走 Loop direct handler；教学 `mode=teaching` 注册闭包绑定节点的 `create_exercise`，调用相同用例。operation key 使用 root task、操作类型、节点、内容版本和固定 purpose slot；count/purpose 属于 fingerprint，同键不同参数冲突。失败任务显式 retry 创建新 run 并保留 root；新任务创建新 root。私有候选及修复对话不回注教学 transcript，ToolResult/公共 DTO 只含公共题目，提交反馈才返回答案。当前练习来源标记 general，不宣称资料 grounding；生成 registry 可重读恢复，但 root/run 关联仍未持久化。

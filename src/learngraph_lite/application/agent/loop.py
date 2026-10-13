@@ -12,6 +12,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from learngraph_lite.agent_core import AgentRunner, Budget, TextMessage
+from learngraph_lite.agent_core.budget import BudgetExceeded
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "budget_exceeded"}
@@ -31,6 +32,16 @@ class RunRequest:
     mode: str = "runner"
     goal_id: str | None = None
     node_id: str | None = None
+    exercise_count: int = 1
+    exercise_purpose: str = "practice"
+    retry_of_run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DirectResult:
+    final_text: str
+    output: dict[str, Any] = field(default_factory=dict)
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -61,6 +72,7 @@ class RunRecord:
     output: dict[str, Any] = field(default_factory=dict)
     goal_id: str | None = None
     node_id: str | None = None
+    root_task_id: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -71,13 +83,15 @@ class AgentLoop:
     def __init__(
         self,
         runner: AgentRunner,
-        direct_handlers: dict[str, Callable[[RunRequest], str]] | None = None,
+        direct_handlers: dict[str, Callable[[RunRequest, Budget, str], DirectResult]] | None = None,
         *,
-        prepare_run: Callable[[RunRequest], PreparedRun] | None = None,
+        prepare_run: Callable[[RunRequest, Budget, str], PreparedRun] | None = None,
+        validate_run: Callable[[RunRequest], None] | None = None,
     ):
         self._runner = runner
         self._direct_handlers = direct_handlers or {}
         self._prepare_run = prepare_run
+        self._validate_run = validate_run
         self._session_scopes: dict[str, tuple[str | None, str | None]] = {}
         self._records_by_key: dict[tuple[str, str], RunRecord] = {}
         self._requests_by_key: dict[tuple[str, str], RunRequest] = {}
@@ -110,12 +124,16 @@ class AgentLoop:
             raise RunAdmissionError("shutting_down", "application is shutting down")
         if (request.goal_id is None) != (request.node_id is None):
             raise RunAdmissionError("invalid_scope", "goal_id and node_id must be provided together")
+        if request.mode in {"exercise", "teaching"} and request.goal_id is None:
+            raise RunAdmissionError("invalid_scope", "this mode requires a goal and node")
         key = (request.session_id, request.idempotency_key)
         existing = self._records_by_key.get(key)
         if existing is not None:
             if self._requests_by_key[key] != request:
                 raise RunAdmissionError("idempotency_conflict", "request ID was already used for different input")
             return existing, False
+        if self._validate_run is not None:
+            self._validate_run(request)
         scope = (request.goal_id, request.node_id)
         if request.session_id in self._session_scopes and self._session_scopes[request.session_id] != scope:
             raise RunAdmissionError("session_scope_conflict", "use a new session when changing goal or node")
@@ -123,8 +141,22 @@ class AgentLoop:
             raise RunAdmissionError("session_busy", "this session already has an active run")
         if len(self._active) >= 2:
             raise RunAdmissionError("capacity_exceeded", "at most two runs can execute at once")
+        root_task_id = ""
+        if request.retry_of_run_id is not None:
+            previous = self._records_by_id.get(request.retry_of_run_id)
+            if previous is None or previous.status not in {"failed", "cancelled", "budget_exceeded"}:
+                raise RunAdmissionError("invalid_retry", "retry requires a failed or cancelled run")
+            if previous.run_id in self._active:
+                raise RunAdmissionError("session_busy", "previous execution has not stopped")
+            original = next(value for key, value in self._requests_by_key.items()
+                            if self._records_by_key[key].run_id == previous.run_id)
+            if replace(original, idempotency_key=request.idempotency_key,
+                       retry_of_run_id=request.retry_of_run_id) != request:
+                raise RunAdmissionError("invalid_retry", "retry must keep the original session and input")
+            root_task_id = previous.root_task_id
         record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued",
                            goal_id=request.goal_id, node_id=request.node_id)
+        record.root_task_id = root_task_id or record.run_id
         self._records_by_key[key] = record
         self._session_scopes[request.session_id] = scope
         self._requests_by_key[key] = request
@@ -143,11 +175,15 @@ class AgentLoop:
             record.updated_at = datetime.now(UTC)
             self._emit(record, "run.started", {"status": record.status, "mode": request.mode})
         try:
+            budget.check_step(0)
             if request.mode in self._direct_handlers:
-                text = self._direct_handlers[request.mode](request)
+                result = self._direct_handlers[request.mode](request, budget, record.root_task_id)
+                budget.check_step(0)
                 with self._condition:
                     if record.status not in TERMINAL_STATUSES:
-                        record.final_text = text
+                        record.final_text = result.final_text
+                        record.output = deepcopy(result.output)
+                        record.usage = dict(result.usage)
                         self._finish(record, "completed", summary="direct generation completed")
                 return
 
@@ -155,7 +191,7 @@ class AgentLoop:
             if request.goal_id is not None:
                 if self._prepare_run is None:
                     raise ValueError("node learning is not configured for this entry point")
-                prepared = self._prepare_run(request)
+                prepared = self._prepare_run(request, budget, record.root_task_id)
             result = prepared.runner.run(prepared.messages, budget=budget)
             output = {}
             if result.status == "completed" and prepared.project_output is not None and not budget.cancelled:
@@ -168,10 +204,17 @@ class AgentLoop:
                     record.output = deepcopy(output)
                     status = "budget_exceeded" if _is_budget_failure(result.status, result.errors) else result.status
                     self._finish(record, status, summary=_summary_for(status, record))
+        except BudgetExceeded as exc:
+            with self._condition:
+                if record.status not in TERMINAL_STATUSES:
+                    record.error = str(exc)
+                    record.usage = dict(budget.usage)
+                    self._finish(record, "cancelled" if budget.cancelled else "budget_exceeded", summary=str(exc))
         except Exception as exc:
             with self._condition:
                 if record.status not in TERMINAL_STATUSES:
                     record.error = str(exc)
+                    record.usage = dict(budget.usage)
                     self._finish(record, "failed", summary="run failed before producing a result")
         finally:
             with self._condition:

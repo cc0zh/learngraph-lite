@@ -229,12 +229,21 @@ def test_learning_agent_demo_refuses_existing_database():
     with tempfile.TemporaryDirectory() as directory:
         database = Path(directory) / "demo.sqlite3"
         result = module.run_demo(database)
+        json.dumps(result, ensure_ascii=False)  # The CLI must be able to emit the full demo result.
         assert result["mode"] == "fixture" and result["status"] == "completed"
         assert "short_explanation:document-loading" in result["final_text"]
         assert result["output"]["citation_map"]["C1"]["cited"] is True
         assert result["output"]["unverified_citation_ids"] == []
         assert result["empty_retrieval"]["output"]["citation_map"] == {}
         assert "资料不足" in result["empty_retrieval"]["final_text"]
+        generated = result["exercise_generation"]
+        assert len(generated["button"]["exercises"]) == len(generated["teaching"]["exercises"]) == 1
+        assert generated["button"]["source_mode"] == "general"
+        for entry in (generated["button"], generated["teaching"]):
+            assert "correct_option_id" not in json.dumps(entry)
+        assert generated["feedback"]["attempt"]["counted"] is True
+        assert generated["feedback"]["attempt"]["is_correct"] is True
+        assert generated["next_action"]["node_id"]
         before = database.read_bytes()
         try:
             module.run_demo(database)

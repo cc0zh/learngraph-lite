@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Protocol
+from copy import deepcopy
+from threading import RLock
+from typing import Callable, Protocol, TypeVar
 
 from learngraph_lite.application.agent import AgentLoop, RunRequest
 from learngraph_lite.domain.learning import GraphSnapshot, MasteryState
@@ -18,6 +20,8 @@ from learngraph_lite.domain.learning.exercises import (
 from learngraph_lite.domain.learning.mastery import AttemptResult, score_mastery
 from learngraph_lite.domain.learning.recommendations import NextAction, recommend_next_action
 
+T = TypeVar("T")
+
 
 @dataclass
 class LearningState:
@@ -26,12 +30,15 @@ class LearningState:
     attempts: list[Attempt] = field(default_factory=list)
     run_ids_by_key: dict[str, str] = field(default_factory=dict)
     final_text_by_key: dict[str, str] = field(default_factory=dict)
+    generation_operations: dict[str, dict] = field(default_factory=dict)
 
 
 class LearningRepository(Protocol):
     def save(self, goal_id: str, state: LearningState) -> None: ...
 
     def get(self, goal_id: str) -> LearningState: ...
+
+    def mutate(self, goal_id: str, update: Callable[[LearningState], T]) -> T: ...
 
 
 class StaleLearningGraphError(ValueError):
@@ -41,15 +48,24 @@ class StaleLearningGraphError(ValueError):
 @dataclass
 class InMemoryLearningRepository:
     _states: dict[str, LearningState] = field(default_factory=dict)
+    _lock: RLock = field(default_factory=RLock, repr=False)
 
     def save(self, goal_id: str, state: LearningState) -> None:
-        self._states[goal_id] = state
+        with self._lock:
+            self._states[goal_id] = state
 
     def get(self, goal_id: str) -> LearningState:
         try:
             return self._states[goal_id]
         except KeyError as exc:
             raise KeyError(f"unknown learning goal: {goal_id}") from exc
+
+    def mutate(self, goal_id: str, update: Callable[[LearningState], T]) -> T:
+        with self._lock:
+            state = deepcopy(self.get(goal_id))
+            result = update(state)
+            self._states[goal_id] = state
+            return result
 
 
 class LearningService:
@@ -77,10 +93,11 @@ class LearningService:
                 node_id=node_id,
             )
         )
-        state.run_ids_by_key.setdefault(request_id, record.run_id)
-        if record.status == "completed":
-            state.final_text_by_key.setdefault(request_id, record.final_text)
-        self._repository.save(goal_id, state)
+        def save_result(current: LearningState):
+            current.run_ids_by_key.setdefault(request_id, record.run_id)
+            if record.status == "completed":
+                current.final_text_by_key.setdefault(request_id, record.final_text)
+        self._repository.mutate(goal_id, save_result)
         return record.final_text
 
     def context(self, goal_id: str, node_id: str, *, expected_graph: GraphSnapshot | None = None) -> dict:
@@ -122,27 +139,36 @@ class LearningService:
             correct_option_id="b",
             explanation="RAG 学习节点要求回答能被资料片段和引用核查。",
         )
-        if any(existing.normalized_hash == exercise.normalized_hash and existing.node_id == node_id for existing in state.exercises.values()):
-            raise ValueError("duplicate exercise for current node revision")
-        state.exercises[exercise.id] = exercise
-        self._repository.save(goal_id, state)
+        def save_exercise(current: LearningState):
+            _check_graph(current, state.graph)
+            if any(existing.normalized_hash == exercise.normalized_hash and existing.node_id == node_id
+                   and existing.graph_content_revision == exercise.graph_content_revision
+                   for existing in current.exercises.values()):
+                raise ValueError("duplicate exercise for current node revision")
+            if exercise.id in current.exercises:
+                raise ValueError("exercise id already exists")
+            current.exercises[exercise.id] = exercise
+        self._repository.mutate(goal_id, save_exercise)
         return exercise.to_public()
 
     def submit_answer(self, goal_id: str, exercise_id: str, selected_option_id: str, attempt_id: str) -> Attempt:
-        state = self._repository.get(goal_id)
-        exercise = state.exercises[exercise_id]
-        if exercise.graph_content_revision != state.graph.content_revision:
-            raise ValueError("exercise version is stale")
-        previous = tuple(attempt for attempt in state.attempts if attempt.exercise_id == exercise_id)
-        attempt = judge_attempt(
-            attempt_id=attempt_id,
-            exercise=exercise,
-            selected_option_id=selected_option_id,
-            previous_attempts_for_exercise=previous,
-        )
-        state.attempts.append(attempt)
-        self._repository.save(goal_id, state)
-        return attempt
+        def submit(state: LearningState):
+            exercise = state.exercises[exercise_id]
+            if exercise.graph_content_revision != state.graph.content_revision:
+                raise ValueError("exercise version is stale")
+            existing = next((item for item in state.attempts if item.id == attempt_id), None)
+            if existing is not None:
+                if existing.exercise_id != exercise_id or existing.selected_option_id != selected_option_id:
+                    raise ValueError("attempt id was already used for different input")
+                return existing
+            previous = tuple(attempt for attempt in state.attempts if attempt.exercise_id == exercise_id)
+            attempt = judge_attempt(
+                attempt_id=attempt_id, exercise=exercise, selected_option_id=selected_option_id,
+                previous_attempts_for_exercise=previous,
+            )
+            state.attempts.append(attempt)
+            return attempt
+        return self._repository.mutate(goal_id, submit)
 
     def mastery(self, goal_id: str, node_id: str) -> tuple[MasteryState, int, float]:
         state = self._repository.get(goal_id)

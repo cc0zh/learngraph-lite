@@ -256,7 +256,7 @@ def test_output_projection_cannot_override_cancellation_and_failures_have_one_te
         assert release.wait(timeout=3)
         return {"sources": [text]}
 
-    loop = AgentLoop(runner, prepare_run=lambda req: PreparedRun(runner, (TextMessage("user", "x"),), project))
+    loop = AgentLoop(runner, prepare_run=lambda req, budget, root: PreparedRun(runner, (TextMessage("user", "x"),), project))
     try:
         record = loop.submit(request())
         assert entered.wait(timeout=3)
@@ -271,7 +271,7 @@ def test_output_projection_cannot_override_cancellation_and_failures_have_one_te
     def fail(text):
         raise RuntimeError("projection failed")
 
-    loop = AgentLoop(runner, prepare_run=lambda req: PreparedRun(runner, (TextMessage("user", "x"),), fail))
+    loop = AgentLoop(runner, prepare_run=lambda req, budget, root: PreparedRun(runner, (TextMessage("user", "x"),), fail))
     try:
         failed = loop.run(request())
         assert failed.status == "failed" and failed.output == {} and failed.error == "projection failed"

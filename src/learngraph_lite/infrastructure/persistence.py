@@ -338,117 +338,140 @@ class SQLiteLearningRepository:
         self._initialize()
 
     def save(self, goal_id: str, state: LearningState) -> None:
-        with closing(self._connect()) as connection:
-            with connection:
-                connection.execute(
-                    """
-                    insert into learning_states(goal_id, graph_json, run_ids_json)
-                    values (?, ?, ?)
-                    on conflict(goal_id) do update set
-                        graph_json = excluded.graph_json,
-                        run_ids_json = excluded.run_ids_json
-                    """,
-                    (
-                        goal_id,
-                        json.dumps(_graph_to_json(state.graph), ensure_ascii=False, sort_keys=True),
-                        json.dumps(
-                            {
-                                "run_ids_by_key": state.run_ids_by_key,
-                                "final_text_by_key": state.final_text_by_key,
-                            },
-                            ensure_ascii=False,
-                            sort_keys=True,
-                        ),
-                    ),
+        with closing(self._connect()) as connection, connection:
+            self._save(connection, goal_id, state)
+
+    def mutate(self, goal_id: str, update):
+        with closing(self._connect()) as connection, connection:
+            connection.execute("begin immediate")
+            state = self._get(connection, goal_id)
+            result = update(state)
+            self._save(connection, goal_id, state)
+            return result
+
+    def _save(self, connection: sqlite3.Connection, goal_id: str, state: LearningState) -> None:
+        connection.execute(
+            """
+            insert into learning_states(goal_id, graph_json, run_ids_json)
+            values (?, ?, ?)
+            on conflict(goal_id) do update set
+                graph_json = excluded.graph_json,
+                run_ids_json = excluded.run_ids_json
+            """,
+            (
+                goal_id,
+                json.dumps(_graph_to_json(state.graph), ensure_ascii=False, sort_keys=True),
+                json.dumps(
+                    {
+                        "run_ids_by_key": state.run_ids_by_key,
+                        "final_text_by_key": state.final_text_by_key,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            ),
+        )
+        connection.execute("delete from learning_generation_operations where goal_id = ?", (goal_id,))
+        connection.executemany(
+            """
+            insert into learning_generation_operations(goal_id, operation_key, fingerprint, exercise_ids_json)
+            values (?, ?, ?, ?)
+            """,
+            ((goal_id, key, operation["fingerprint"], json.dumps(operation["ids"]))
+             for key, operation in state.generation_operations.items()),
+        )
+        connection.execute("delete from learning_exercises where goal_id = ?", (goal_id,))
+        connection.executemany(
+            """
+            insert into learning_exercises(
+                goal_id,
+                exercise_id,
+                node_id,
+                graph_content_revision,
+                prompt,
+                options_json,
+                correct_option_id,
+                explanation,
+                normalized_hash
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    goal_id,
+                    exercise.id,
+                    exercise.node_id,
+                    exercise.graph_content_revision,
+                    exercise.prompt,
+                    json.dumps([asdict(option) for option in exercise.options], ensure_ascii=False, sort_keys=True),
+                    exercise.correct_option_id,
+                    exercise.explanation,
+                    exercise.normalized_hash,
                 )
-                connection.execute("delete from learning_exercises where goal_id = ?", (goal_id,))
-                connection.executemany(
-                    """
-                    insert into learning_exercises(
-                        goal_id,
-                        exercise_id,
-                        node_id,
-                        graph_content_revision,
-                        prompt,
-                        options_json,
-                        correct_option_id,
-                        explanation,
-                        normalized_hash
-                    )
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        (
-                            goal_id,
-                            exercise.id,
-                            exercise.node_id,
-                            exercise.graph_content_revision,
-                            exercise.prompt,
-                            json.dumps([asdict(option) for option in exercise.options], ensure_ascii=False, sort_keys=True),
-                            exercise.correct_option_id,
-                            exercise.explanation,
-                            exercise.normalized_hash,
-                        )
-                        for exercise in state.exercises.values()
-                    ),
+                for exercise in state.exercises.values()
+            ),
+        )
+        connection.execute("delete from learning_attempts where goal_id = ?", (goal_id,))
+        connection.executemany(
+            """
+            insert into learning_attempts(
+                goal_id,
+                attempt_id,
+                exercise_id,
+                node_id,
+                selected_option_id,
+                is_correct,
+                counted,
+                created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    goal_id,
+                    attempt.id,
+                    attempt.exercise_id,
+                    attempt.node_id,
+                    attempt.selected_option_id,
+                    1 if attempt.is_correct else 0,
+                    1 if attempt.counted else 0,
+                    attempt.created_at.isoformat(),
                 )
-                connection.execute("delete from learning_attempts where goal_id = ?", (goal_id,))
-                connection.executemany(
-                    """
-                    insert into learning_attempts(
-                        goal_id,
-                        attempt_id,
-                        exercise_id,
-                        node_id,
-                        selected_option_id,
-                        is_correct,
-                        counted,
-                        created_at
-                    )
-                    values (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        (
-                            goal_id,
-                            attempt.id,
-                            attempt.exercise_id,
-                            attempt.node_id,
-                            attempt.selected_option_id,
-                            1 if attempt.is_correct else 0,
-                            1 if attempt.counted else 0,
-                            attempt.created_at.isoformat(),
-                        )
-                        for attempt in state.attempts
-                    ),
-                )
+                for attempt in state.attempts
+            ),
+        )
 
     def get(self, goal_id: str) -> LearningState:
-        with closing(self._connect()) as connection:
-            state_row = connection.execute(
-                "select graph_json, run_ids_json from learning_states where goal_id = ?",
-                (goal_id,),
-            ).fetchone()
-            if state_row is None:
-                raise KeyError(f"unknown learning goal: {goal_id}")
-            exercise_rows = connection.execute(
-                """
-                select exercise_id, node_id, graph_content_revision, prompt, options_json,
-                    correct_option_id, explanation, normalized_hash
-                from learning_exercises
-                where goal_id = ?
-                order by exercise_id
-                """,
-                (goal_id,),
-            ).fetchall()
-            attempt_rows = connection.execute(
-                """
-                select attempt_id, exercise_id, node_id, selected_option_id, is_correct, counted, created_at
-                from learning_attempts
-                where goal_id = ?
-                order by rowid
-                """,
-                (goal_id,),
-            ).fetchall()
+        with closing(self._connect()) as connection, connection:
+            connection.execute("begin")
+            return self._get(connection, goal_id)
+
+    def _get(self, connection: sqlite3.Connection, goal_id: str) -> LearningState:
+        state_row = connection.execute(
+            "select graph_json, run_ids_json from learning_states where goal_id = ?",
+            (goal_id,),
+        ).fetchone()
+        if state_row is None:
+            raise KeyError(f"unknown learning goal: {goal_id}")
+        exercise_rows = connection.execute(
+            """
+            select exercise_id, node_id, graph_content_revision, prompt, options_json,
+                correct_option_id, explanation, normalized_hash
+            from learning_exercises
+            where goal_id = ?
+            order by exercise_id
+            """,
+            (goal_id,),
+        ).fetchall()
+        attempt_rows = connection.execute(
+            """
+            select attempt_id, exercise_id, node_id, selected_option_id, is_correct, counted, created_at
+            from learning_attempts
+            where goal_id = ?
+            order by rowid
+            """,
+            (goal_id,),
+        ).fetchall()
         exercises = {
             row[0]: ExercisePrivate(
                 id=row[0],
@@ -483,6 +506,10 @@ class SQLiteLearningRepository:
             attempts=attempts,
             run_ids_by_key=run_ids_by_key,
             final_text_by_key=final_text_by_key,
+            generation_operations={row[0]: {"fingerprint": row[1], "ids": json.loads(row[2])}
+                                   for row in connection.execute(
+                                       "select operation_key, fingerprint, exercise_ids_json "
+                                       "from learning_generation_operations where goal_id = ?", (goal_id,))},
         )
 
     def _initialize(self) -> None:
@@ -525,6 +552,18 @@ class SQLiteLearningRepository:
                         counted integer not null,
                         created_at text not null,
                         primary key(goal_id, attempt_id)
+                    )
+                    """
+                )
+
+                connection.execute(
+                    """
+                    create table if not exists learning_generation_operations (
+                        goal_id text not null,
+                        operation_key text not null,
+                        fingerprint text not null,
+                        exercise_ids_json text not null,
+                        primary key(goal_id, operation_key)
                     )
                     """
                 )

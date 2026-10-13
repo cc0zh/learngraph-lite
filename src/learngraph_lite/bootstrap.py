@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from learngraph_lite.agent_core import AgentRunner, ModelResponse, TextMessage, Tool, ToolCall, ToolRegistry
 from learngraph_lite.agent_core.models import ModelGateway
-from learngraph_lite.application.agent import AgentLoop, RunRequest
+from learngraph_lite.agent_core.gateway import budgeted
+from learngraph_lite.application.agent import AgentLoop, DirectResult, RunRequest
+from learngraph_lite.application.exercise_generation import GenerateExercise
 from learngraph_lite.application.documents import DocumentRepository
 from learngraph_lite.application.learning import LearningRepository
 from learngraph_lite.application.learning_agent import LearningContext
@@ -57,7 +59,20 @@ def build_fixture_loop() -> AgentLoop:
 def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learning: LearningRepository,
                         documents: DocumentRepository | None = None) -> AgentLoop:
     context = LearningContext(planning, learning, documents)
-    return AgentLoop(AgentRunner(model, build_echo_tools()), prepare_run=lambda request: context.prepare(model, request))
+    generator = GenerateExercise(learning, context.context)
+
+    def generate(request, budget, root_task_id):
+        gateway = budgeted(model, budget)
+        result = generator.generate(request.goal_id, request.node_id, root_task_id,
+                                    {"count": request.exercise_count, "purpose": request.exercise_purpose}, gateway)
+        return DirectResult("练习已保存（非基于上传资料）。", result, dict(gateway.usage))
+
+    def validate(request):
+        if request.mode in {"exercise", "teaching"}:
+            context.context(request.goal_id, request.node_id)
+
+    return AgentLoop(AgentRunner(model, build_echo_tools()), direct_handlers={"exercise": generate}, validate_run=validate,
+                     prepare_run=lambda request, budget, root: context.prepare(budgeted(model, budget), request, root))
 
 
 def smoke() -> str:
@@ -105,7 +120,8 @@ def create_real_app(*, database: str | Path | None = None):
         documents = SQLiteDocumentRepository(database_path)
         loop = build_learning_loop(gateway, planning, learning, documents)
         return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close,
-                          learning_context=LearningContext(planning, learning, documents))
+                          learning_context=LearningContext(planning, learning, documents),
+                          exercises=GenerateExercise(learning, LearningContext(planning, learning).context))
     except Exception:
         gateway.close()
         raise

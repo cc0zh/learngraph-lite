@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .budget import Budget, BudgetExceeded
-from .models import ModelGateway, ModelResponse, TextMessage
+from .gateway import BudgetedModelGateway, budgeted
+from .models import ModelGateway, TextMessage
 from .tools import ToolError, ToolRegistry
 
 
@@ -28,17 +29,16 @@ class AgentRunner:
         self._tools = tools
 
     def run(self, messages: tuple[TextMessage, ...], budget: Budget | None = None) -> RunnerResult:
-        budget = budget or Budget()
+        budget = budget or (self._model.budget if isinstance(self._model, BudgetedModelGateway) else Budget())
+        model = budgeted(self._model, budget)
         transcript = list(messages)
         errors: list[str] = []
-        usage: dict[str, int] = {}
+        usage = model.usage
 
         try:
             for step in range(budget.max_steps):
                 budget.check_step(step)
-                budget.take_model_call()
-                response = self._model.complete(tuple(transcript), self._tools.model_tools())
-                _merge_usage(usage, response)
+                response = model.complete(tuple(transcript), self._tools.model_tools())
                 budget.check_step(step)
                 if response.content or response.tool_calls:
                     transcript.append(
@@ -100,8 +100,3 @@ class AgentRunner:
                 errors=tuple(errors),
                 usage=usage,
             )
-
-
-def _merge_usage(usage: dict[str, int], response: ModelResponse) -> None:
-    for key, value in response.usage.items():
-        usage[key] = usage.get(key, 0) + value

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunRequest, TERMINAL_STATUSES
 from learngraph_lite.application.documents import DocumentAccessError
+from learngraph_lite.application.exercise_generation import ExerciseError, GenerateExercise
 from learngraph_lite.application.learning_agent import LearningContext, LearningContextError
 from learngraph_lite.presentation.sse import encode_snapshot, encode_sse, public_run
 
@@ -29,6 +30,8 @@ class SubmitRun(BaseModel):
     user_text: str = Field(strict=True, min_length=1, max_length=16000)
     goal_id: Identifier | None = None
     node_id: Identifier | None = None
+    mode: Literal["runner", "teaching"] = "runner"
+    retry_of_run_id: Identifier | None = None
 
     @field_validator("user_text")
     @classmethod
@@ -52,9 +55,40 @@ class AnswerSource(BaseModel):
     cited: bool
 
 
+class PublicOption(BaseModel):
+    id: str
+    text: str
+
+
+class PublicExercise(BaseModel):
+    id: str
+    goal_id: str
+    node_id: str
+    graph_content_revision: int
+    prompt: str
+    options: list[PublicOption]
+
+
 class AnswerSources(BaseModel):
-    citation_map: dict[str, AnswerSource]
-    unverified_citation_ids: list[str]
+    citation_map: dict[str, AnswerSource] = Field(default_factory=dict)
+    unverified_citation_ids: list[str] = Field(default_factory=list)
+    exercises: list[PublicExercise] | None = None
+    source_mode: Literal["general"] | None = None
+
+
+class SubmitExercises(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: Identifier
+    request_id: Identifier
+    count: int = Field(default=1, strict=True, ge=1, le=3)
+    purpose: str = Field(default="practice", strict=True, min_length=1, max_length=2000)
+    retry_of_run_id: Identifier | None = None
+
+
+class SubmitAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    submission_id: Identifier
+    selected_option_id: Identifier
 
 
 class LocatedSource(BaseModel):
@@ -104,6 +138,7 @@ def create_app(
     heartbeat_seconds: float = 15.0,
     on_close: Callable[[], None] | None = None,
     learning_context: LearningContext | None = None,
+    exercises: GenerateExercise | None = None,
 ) -> FastAPI:
     """Create a process-local API, with cooperative shutdown and snapshot-first SSE."""
     if not math.isfinite(heartbeat_seconds) or heartbeat_seconds <= 0:
@@ -145,7 +180,7 @@ def create_app(
     @app.exception_handler(RunAdmissionError)
     async def admission_error(request: Request, exc: RunAdmissionError):
         status = {"session_busy": 409, "capacity_exceeded": 429, "idempotency_conflict": 409,
-                  "shutting_down": 503, "invalid_scope": 422, "session_scope_conflict": 409}
+                  "shutting_down": 503, "invalid_scope": 422, "session_scope_conflict": 409, "invalid_retry": 409}
         return _error(
             status[exc.code], exc.code, str(exc),
             retryable=exc.code in {"session_busy", "capacity_exceeded", "shutting_down"},
@@ -163,6 +198,33 @@ def create_app(
     @app.exception_handler(DocumentAccessError)
     async def document_error(request: Request, exc: DocumentAccessError):
         return _error(409, exc.code, str(exc))
+
+    @app.exception_handler(ExerciseError)
+    async def exercise_error(request: Request, exc: ExerciseError):
+        return _error(404 if exc.code == "exercise_not_found" else 409, exc.code, str(exc))
+
+    if exercises is not None:
+        @app.post("/api/goals/{goal_id}/nodes/{node_id}/exercises", status_code=202,
+                  response_model=PublicRun, response_model_exclude_unset=True)
+        def generate_exercises(goal_id: Identifier, node_id: Identifier, body: SubmitExercises):
+            return public_run(loop.submit(RunRequest(
+                session_id=body.session_id, user_text="生成练习", idempotency_key=body.request_id,
+                mode="exercise", goal_id=goal_id, node_id=node_id,
+                exercise_count=body.count, exercise_purpose=body.purpose,
+                retry_of_run_id=body.retry_of_run_id,
+            )))
+
+        @app.get("/api/goals/{goal_id}/nodes/{node_id}/exercises")
+        def list_exercises(goal_id: Identifier, node_id: Identifier):
+            return exercises.list_exercises(goal_id, node_id)
+
+        @app.get("/api/goals/{goal_id}/exercises/{exercise_id}", response_model=PublicExercise)
+        def get_exercise(goal_id: Identifier, exercise_id: Identifier):
+            return exercises.get_exercise(goal_id, exercise_id)
+
+        @app.post("/api/goals/{goal_id}/exercises/{exercise_id}/attempts")
+        def submit_answer(goal_id: Identifier, exercise_id: Identifier, body: SubmitAnswer):
+            return exercises.submit_answer(goal_id, exercise_id, body.selected_option_id, body.submission_id)
 
     if learning_context is not None:
         @app.get("/api/goals/{goal_id}/nodes/{node_id}/context")
@@ -204,6 +266,7 @@ def create_app(
         record = loop.submit(RunRequest(
             session_id=session_id, user_text=body.user_text, idempotency_key=body.request_id,
             goal_id=body.goal_id, node_id=body.node_id,
+            mode=body.mode, retry_of_run_id=body.retry_of_run_id,
         ))
         return public_run(record)
 

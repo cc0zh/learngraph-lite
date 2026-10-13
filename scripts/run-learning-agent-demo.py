@@ -16,7 +16,9 @@ if str(ROOT / "src") not in sys.path:
 from learngraph_lite.agent_core import ModelResponse, ToolCall
 from learngraph_lite.application.agent import RunRequest
 from learngraph_lite.application.documents import DocumentService
+from learngraph_lite.application.exercise_generation import GenerateExercise
 from learngraph_lite.application.learning import LearningService
+from learngraph_lite.application.learning_agent import LearningContext
 from learngraph_lite.application.planning import PlanningService, candidate_rag_graph
 from learngraph_lite.bootstrap import build_learning_loop, build_real_gateway
 from learngraph_lite.infrastructure import SQLiteDocumentRepository, SQLiteLearningRepository, SQLitePlanningRepository
@@ -24,7 +26,18 @@ from learngraph_lite.infrastructure import SQLiteDocumentRepository, SQLiteLearn
 
 class LearningFixtureModel:
     def complete(self, messages, tools):
+        if not tools:
+            purpose = json.loads(messages[1].content)["purpose"]
+            return ModelResponse(content=json.dumps({"exercises": [{
+                "prompt": f"清洗资料时如何保留引用定位？（{purpose}）",
+                "options": [{"id": "a", "text": "丢弃原文位置"}, {"id": "b", "text": "保存片段与原文偏移"}],
+                "correct_option_id": "b", "explanation": "保存偏移可让回答引用返回原文位置；本题非基于上传资料。",
+            }]}, ensure_ascii=False))
         results = [json.loads(message.content) for message in messages if message.role == "tool"]
+        if any(tool["function"]["name"] == "create_exercise" for tool in tools):
+            if not results:
+                return ModelResponse(tool_calls=(ToolCall("create-1", "create_exercise", '{"purpose":"demo-teaching"}'),))
+            return ModelResponse(content="fixture：练习已保存（非基于上传资料），请选择选项后提交。")
         if not results:
             query = "zzzz-no-match" if "空召回" in messages[2].content else "清洗"
             return ModelResponse(tool_calls=(
@@ -80,16 +93,29 @@ def run_demo(database: Path, *, real: bool = False) -> dict:
         if record.status != "completed":
             raise RuntimeError(record.error or record.status)
         empty = None
+        practice = None
         if not real:
             empty_record = loop.run(RunRequest("empty-session", "演示空召回", "empty-1",
                                               goal_id="demo-goal", node_id="document-loading"))
             if empty_record.status != "completed":
                 raise RuntimeError(empty_record.error or empty_record.status)
             empty = {"final_text": empty_record.final_text, "output": empty_record.output}
+            button = loop.run(RunRequest("exercise-session", "生成练习", "exercise-1", mode="exercise",
+                                         goal_id="demo-goal", node_id="document-loading"))
+            tutor = loop.run(RunRequest("teaching-session", "出一道题", "teaching-1", mode="teaching",
+                                        goal_id="demo-goal", node_id="document-loading"))
+            if button.status != "completed" or tutor.status != "completed":
+                raise RuntimeError(button.error or tutor.error)
+            context = LearningContext(planning_repository, learning_repository)
+            generator = GenerateExercise(learning_repository, context.context)
+            feedback = generator.submit_answer("demo-goal", button.output["exercises"][0]["id"], "b", "generated-a1")
+            feedback["attempt"]["created_at"] = feedback["attempt"]["created_at"].isoformat()
+            practice = {"button": button.output, "teaching": tutor.output,
+                        "feedback": feedback, "next_action": context.next_action("demo-goal", "document-loading", 10)}
         return {"mode": "real" if real else "fixture", "data": "fixture-seeded SQLite",
                 "goal_id": "demo-goal", "node_id": "document-loading", "status": record.status,
                 "final_text": record.final_text, "usage": record.usage, "output": record.output,
-                "empty_retrieval": empty}
+                "empty_retrieval": empty, "exercise_generation": practice}
     finally:
         loop.close()
         if real:
