@@ -22,7 +22,7 @@
 - [x] M4A：TXT/Markdown 文档解析、分块、简单中英文检索、绑定、引用定位与空召回离线切片。
 - [x] M4B：声明式学习页、固定组件、事件 ACK、解释任务幂等离线切片。
 - [x] M4C：图谱提案、差异审核、接受/拒绝、base_revision 冲突离线切片。
-- [ ] M5：全量回归、真实模型 smoke、20 例评估集与演示交接；已完成 20 例离线 fixture 评估集和可生成报告脚本，真实模型 smoke 与演示交接仍待完成。
+- [ ] M5：全量回归、真实模型 smoke、20 例评估集与演示交接；已完成 20 例离线 fixture 评估集、可生成报告脚本和可复现 fixture demo，真实模型 smoke 与浏览器演示交接仍待完成。
 - 2026-10-13：采用轻量 Python 分层骨架先完成 M0/M1 离线可验证切片；FastAPI/React/SQLite 仍按后续阶段引入，避免在模板态一次性拉入未验证依赖。
 - 2026-10-13：已通过 GitHub raw 核验 nanobot 固定 commit 的 README、architecture.md、agent/loop.py、agent/runner.py 和 LICENSE；复用记录已更新。GitHub tree API 受 rate limit，未取得完整目录树。
 - 2026-10-13：M2 离线切片完成目标草稿、最多两轮澄清、目标确认、8 节点候选图谱、草稿编辑、发布校验、revision 冲突与刷新恢复所需的内存仓库；HTTP/SQLite/前端 E2E 待后续阶段接入。
@@ -32,6 +32,7 @@
 - 2026-10-13：M4C 离线切片完成 GraphProposal、add/update node、add/remove dependency、pending/accepted/rejected/conflicted 状态、base_revision 冲突、接受才改图、拒绝无副作用、非法操作和成环校验。
 - 2026-10-13：M1 生命周期补强完成 AgentLoop run_id 查询、seq 事件、运行摘要、usage 汇总、预算耗尽映射、取消终态和 presentation 公共 DTO/SSE 编码；当前环境无 FastAPI/Starlette，真实 HTTP 路由测试仍待后续依赖接入。
 - 2026-10-13：M5 离线评估切片新增 evals/cases/offline-m5.json、evals/run.py 和固定报告，覆盖规划、图谱、学习、资料、学习页、提案和运行生命周期 20 个 deterministic case；报告明确真实模型 smoke 未运行。
+- 2026-10-13：M5 fixture demo 切片新增 scripts/run-fixture-demo.py 和 docs/demo/fixture-demo.md，串起目标确认、图谱发布、资料引用、空召回、节点学习、练习掌握、下一步、声明式学习页与图谱提案；输出明确标记为 deterministic fixture demo。
 
 ## 验收与交接
 
@@ -51,6 +52,9 @@
   - python evals/run.py：M5 离线评估切片通过，输出 20/20 offline fixture eval cases passed，并生成 evals/reports/offline-fixture-report.md。
   - python scripts/run-python-tests.py：M5 离线评估切片通过，34 Python tests passed。
   - npm.cmd run ci：M5 离线评估切片通过，包含 Python 边界检查、34 个 Python 测试和 19 个 Node 模板工具测试。
+  - npm.cmd run demo:fixture：M5 fixture demo 切片通过，生成 docs/demo/fixture-demo.md。
+  - python scripts/run-python-tests.py：M5 fixture demo 切片通过，36 Python tests passed。
+  - npm.cmd run ci：M5 fixture demo 切片通过，包含 Python 边界检查、36 个 Python 测试和 19 个 Node 模板工具测试。
 - 未执行的检查、阻塞和遗留事项：
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
@@ -58,9 +62,11 @@
   - M1 真实 HTTP/SSE 路由测试未执行；当前只验证应用层生命周期与 presentation SSE 编码，不声称已完成 FastAPI 路由。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析与 SQLite FTS5 适配器未实现。
   - M4B 当前只有后端声明式包与事件用例；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
+  - fixture demo 不是浏览器录屏或真实模型演示；M5 仍需真实模型 smoke 与最终演示交接材料。
 - 必要的复验方式：
   - python scripts/run-python-tests.py
   - python scripts/check-python-boundaries.py
   - npm.cmd run eval:offline
+  - npm.cmd run demo:fixture
   - npm.cmd run ci
   - 后续阶段按本计划逐项补充 E2E 与真实模型记录。
