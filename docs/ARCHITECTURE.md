@@ -1,6 +1,6 @@
 # 架构总览
 
-LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前仓库处于 M0/M1 起步阶段：已建立 Python 分层骨架、独立 Agent 内核、应用层 AgentLoop、少量纯领域规则和离线测试；FastAPI、React、SQLite、资料解析和 P1 功能仍按执行计划推进。
+LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前仓库处于离线核心实现阶段：已建立 Python 分层骨架、独立 Agent 内核、应用层 AgentLoop、领域学习规则、公共运行事件投影和离线测试；FastAPI、React、SQLite 与真实模型适配仍按执行计划推进。
 
 正式规格以 docs/从零构建功能文档.md 为准。本文记录当前实现边界，避免把目录名误当作架构完成。
 
@@ -8,9 +8,9 @@ LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前仓�
 
 - src/learngraph_lite/agent_core/：通用 AgentRunner、工具注册表、模型协议和预算控制。不能导入 LearnGraph 领域、HTTP、ORM 或基础设施。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。不能导入 Agent 内核、应用层或基础设施。
-- src/learngraph_lite/application/：应用用例与编排。当前包含 AgentLoop，负责运行准入、幂等、预算注入和唯一终态。
+- src/learngraph_lite/application/：应用用例与编排。当前包含 AgentLoop，负责运行准入、幂等、预算注入、运行摘要、公共事件和唯一终态。
 - src/learngraph_lite/infrastructure/：后续放模型 SDK、SQLite、文档解析、检索等适配器。
-- src/learngraph_lite/presentation/：后续放 FastAPI 路由、SSE DTO 与前端入口适配。
+- src/learngraph_lite/presentation/：当前包含无框架公共 DTO/SSE 编码；后续放 FastAPI 路由与前端入口适配。
 - src/learngraph_lite/bootstrap.py：显式装配 fixture 模型和工具，供 M1 smoke 使用；导入包本身不启动 Web 或数据库。
 - tests/：同时保留模板 Node 工具测试与新增 Python 架构/内核/领域测试。
 - scripts/check-python-boundaries.py：轻量 AST import 边界检查。
@@ -35,3 +35,5 @@ LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前仓�
 ## 当前运行拓扑
 
 M1 fixture smoke 使用 python -m learngraph_lite.bootstrap：bootstrap 装配 fixture model、AgentRunner 和 echo tool，AgentLoop 创建一次 run，Runner 完成模型-工具-模型回合。fixture 输出必须标记为演示模式，不能作为真实模型能力证明。
+
+AgentLoop 会保存 run_id、session_id、终态、摘要、usage 和递增 seq 事件。presentation 层只把这些应用层记录投影成公共 run DTO 与 SSE frame，不读取 Runner transcript，不承担业务终态写入。当前测试覆盖公共投影与取消/预算终态；真实 HTTP 路由仍待 FastAPI 接入后补验。

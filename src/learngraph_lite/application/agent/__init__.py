@@ -1,5 +1,5 @@
 """Agent application services."""
 
-from .loop import AgentLoop, RunRecord, RunRequest
+from .loop import AgentLoop, RunEvent, RunRecord, RunRequest
 
-__all__ = ["AgentLoop", "RunRecord", "RunRequest"]
+__all__ = ["AgentLoop", "RunEvent", "RunRecord", "RunRequest"]

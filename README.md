@@ -2,7 +2,7 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库处于 M0/M1 起步阶段：已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、少量纯领域规则、fixture smoke 和离线测试。FastAPI、React、SQLite、资料检索、学习页和 P1 闭环仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
+当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、fixture smoke 和离线测试。FastAPI、React、SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
 
 ## 开发准备
 
@@ -27,9 +27,10 @@ macOS/Linux 使用 npm。Windows 环境问题见 docs/WINDOWS.md。
 ## 当前架构
 
 - src/learngraph_lite/agent_core/：独立 Agent 内核，包含模型协议、工具注册表、Runner 和预算控制。
-- src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入和终态。
+- src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入、运行摘要、公共事件和终态。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。
-- src/learngraph_lite/infrastructure/ 与 src/learngraph_lite/presentation/：后续放适配器和 HTTP/UI 入口。
+- src/learngraph_lite/presentation/：当前包含公共 run DTO 与 SSE 编码；真实 HTTP 路由后续接入。
+- src/learngraph_lite/infrastructure/：后续放模型 SDK、SQLite、文档解析和检索适配器。
 
 更多边界见 docs/ARCHITECTURE.md。
 

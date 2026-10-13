@@ -16,7 +16,7 @@
 - [x] M1：新增应用层 AgentLoop，测试幂等、直接生成路径和 Runner 路径分离。
 - [x] M1：新增少量纯领域规则，证明判分/图谱校验不依赖模型或 Runner。
 - [x] M1：新增轻量 import 边界检查并接入 CI。
-- [ ] M1：补 HTTP/SSE 最小生命周期、运行摘要与取消状态的真实路由测试。
+- [ ] M1：补 HTTP/SSE 最小生命周期、运行摘要与取消状态的真实路由测试；已完成无依赖公共生命周期与 SSE 投影离线切片，FastAPI 真实路由仍待接入。
 - [x] M2：目标澄清、确认、图谱草稿/编辑/发布、revision 与规划离线 E2E。
 - [x] M3：节点 Agent 学习、单选题生成、服务端判分、进度与下一步离线闭环。
 - [x] M4A：TXT/Markdown 文档解析、分块、简单中英文检索、绑定、引用定位与空召回离线切片。
@@ -30,6 +30,7 @@
 - 2026-10-13：M4A 离线切片完成 TXT/Markdown/PDF-text 文档模型、分块、中文/英文关键词检索、目标/节点绑定、引用定位、空召回说明和旧引用版本拒绝；真实 PDF 二进制解析、SQLite FTS5 和前端原文页仍待接入。
 - 2026-10-13：M4B 离线切片完成声明式 LessonPackage、固定组件 schema 校验、Markdown/组件可执行字段拒绝、事件 ACK 幂等、学习页事件不改成绩、正式作答复用 LearningService、解释 run 按 source_event_id/slot 幂等；前端渲染器和真实路由仍待接入。
 - 2026-10-13：M4C 离线切片完成 GraphProposal、add/update node、add/remove dependency、pending/accepted/rejected/conflicted 状态、base_revision 冲突、接受才改图、拒绝无副作用、非法操作和成环校验。
+- 2026-10-13：M1 生命周期补强完成 AgentLoop run_id 查询、seq 事件、运行摘要、usage 汇总、预算耗尽映射、取消终态和 presentation 公共 DTO/SSE 编码；当前环境无 FastAPI/Starlette，真实 HTTP 路由测试仍待后续依赖接入。
 
 ## 验收与交接
 
@@ -43,10 +44,14 @@
   - npm.cmd run ci：M4A 后通过，包含 Python 边界检查、21 个 Python 测试和 19 个 Node 模板工具测试。
   - npm.cmd run ci：M4B 后通过，包含 Python 边界检查、25 个 Python 测试和 19 个 Node 模板工具测试。
   - npm.cmd run ci：M4C 后通过，包含 Python 边界检查、29 个 Python 测试和 19 个 Node 模板工具测试。
+  - python scripts/run-python-tests.py：M1 生命周期补强后通过，32 Python tests passed。
+  - python scripts/check-python-boundaries.py：M1 生命周期补强后通过，输出 Python import boundaries passed。
+  - npm.cmd run ci：M1 生命周期补强后通过，包含 Python 边界检查、32 个 Python 测试和 19 个 Node 模板工具测试。
 - 未执行的检查、阻塞和遗留事项：
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub 源码二次读取未完成，不能声称本轮已经复核其源码细节。
   - FastAPI/React/SQLite/P1 功能尚未实现。
+  - M1 真实 HTTP/SSE 路由测试未执行；当前只验证应用层生命周期与 presentation SSE 编码，不声称已完成 FastAPI 路由。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析与 SQLite FTS5 适配器未实现。
   - M4B 当前只有后端声明式包与事件用例；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
 - 必要的复验方式：
