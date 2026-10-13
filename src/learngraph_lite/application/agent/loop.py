@@ -38,6 +38,8 @@ class RunRequest:
     task_ref: str | None = None
     planning_version: int = 0
     graph_node_count: int = 10
+    lesson_purpose: str = "学习当前节点"
+    lesson_exercise_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -132,7 +134,7 @@ class AgentLoop:
                 raise RunAdmissionError("invalid_scope", "planning tasks require a goal task_ref and no node")
         elif request.task_ref is not None or (request.goal_id is None) != (request.node_id is None):
             raise RunAdmissionError("invalid_scope", "goal_id and node_id must be provided together")
-        if request.mode in {"exercise", "teaching"} and request.goal_id is None:
+        if request.mode in {"exercise", "lesson", "teaching"} and request.goal_id is None:
             raise RunAdmissionError("invalid_scope", "this mode requires a goal and node")
         key = (request.session_id, request.idempotency_key)
         existing = self._records_by_key.get(key)

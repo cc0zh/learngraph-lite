@@ -1,5 +1,18 @@
 # LearnGraph Lite 从零实现计划
 
+## 学习包生成与事件 HTTP 切片（已完成）
+
+- 范围：沿用 shared gateway、GenerationSources 和 direct/tool 同用例；生成固定 Markdown/quiz_choice/stepper/comparison_table，题卡只引用同目标/节点/内容 revision 的已有题，不含答案。top5 来源与一次 repair 共用来源表；保存前复验资料与业务版本。
+- 持久化：教学包 schema/version/source metadata、generation operation 和事件版本；SQLite 短事务与内存 mutate 防止不同会话保存/ACK 覆盖。同任务同配置复用，异配置冲突；显式新任务生成新包版本。旧包可查看并标 outdated。
+- HTTP：按需生成、节点列表、包详情、包引用定位和事件 ACK；限定组件对应动作/payload，ACK 不改成绩，作答仍走 attempts。模型不参与普通 ACK。
+- 验收：grounding/repair/预算、题目作用域与版本、未知组件和字段、幂等/并发、SQLite 重开/旧 schema、HTTP/SSE/删除降级与事件不改成绩；通过 CI/离线评估/demo 后同步文档与 commit。
+- 边界：保留旧离线解释用例但不提供解释 HTTP；其尚未满足事件关联、初始 run 和输入同事务要求。run/session 持久化与解释并发/失败重试留下一切片，不以进程内去重宣称 M4B 完成。本轮无需新增外部依赖。
+- 实现：GenerateLesson 严格候选与一次 repair，按钮/教学工具共用 gateway；schema/version、独立来源表、题目 public DTO、generation operation、HTTP 列表/详情/引用/ACK 接通 real factory。内存仓库深拷贝与 RLock，SQLite BEGIN IMMEDIATE 防止生成/ACK 丢更新；旧 schema 自动补列并只读，历史包在节点删除或 learning 未同步时仍可读取。
+- 测试收敛：新增6个聚合行为测试，覆盖来源 top5/1600、修复、参数冲突/版本/重开、非法候选/跨节点题目、生成期间上下文/来源/题目变更、空召回零调用/预算、teaching共享六次调用与各产物C1隔离、HTTP/SSE/ACK不计分/正式作答、并发生成和ACK/回滚/解释期间ACK保留、旧schema迁移。
+- 验证：专项6项通过；`npm.cmd run ci` 通过104个Python、19个Node及Python import边界、文档/仓库/Action检查；`eval:offline` 为20/20；`demo:fixture`、`demo:learning-agent`、`smoke:fixture` 均exit 0。TestClient httpx弃用提示与关闭测试预期graceful timeout/CancelledError仍存在，smoke终端中文显示乱码。真实供应商调用未运行。
+- 失败与修复：首轮98项Python回归9项失败，旧choice_card/select/字符串steps fixture与demo/eval未适配新schema；改用quiz_choice/markdown、step_changed和结构化steps后最终CI通过。新增专项初轮HTTP作答断言误读顶层is_correct，按既有attempt反馈结构修正后6项通过；PowerShell中文批量替换未生效，改用apply_patch完成编辑。
+- 文档与暂停：同步README、架构、技术债与[history索引](../../histories/2026-10/20261013-2020-lesson-generation-http.md)，提炼短事务增量更新学习笔记。[阶段总结与真实测试](../../demo/stage-review-real-testing.md) 提供已有命令与学习包手测步骤。最终文档骨架、引用路径和diff检查通过。本切片收尾提交后按用户要求暂停整体goal，不进入解释/run持久化或React阶段；P0/P1/M5尚未全部完成。
+
 ## 资料型图谱与练习生成切片（已完成）
 
 - 范围：复用显式目标/节点绑定检索，top5、每片段320字符；图谱与练习模型上下文包含真实资料，repair 共用来源表。无绑定标 general，有绑定空召回明确失败。
@@ -111,8 +124,8 @@
   - React/P1 与完整业务 HTTP 尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
   - HTTP run/事件/请求去重与 session 作用域仅在进程内存中，未实现重启恢复或 token streaming；real factory 已接 planning/learning 只读用例及绑定资料检索/引用定位，完整业务 HTTP 仍待后续。同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
   - assistant tool_calls/tool 消息配对和 Pydantic 工具参数校验已完成；真实供应商兼容性仍待 smoke 验证，见 tech-debt-tracker.md；Starlette TestClient 的 httpx 弃用提示也已记录。
-  - M4A 已接通 UTF-8 TXT/Markdown/文本型 PDF 二进制上传、解析与中文 BM25 检索；资料型图谱/练习/学习页 grounding、完整版本历史和 React 原文页未实现。
-  - M4B 当前已完成后端声明式包、事件用例和 SQLite 最小持久化；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
+  - M4A 已接通 UTF-8 TXT/Markdown/文本型 PDF 二进制上传、解析、中文 BM25 检索和资料型图谱/练习/学习包 grounding；完整版本历史、语义支持评估和 React 原文页未实现。
+  - M4B 当前已完成固定组件生成、版本/来源表、HTTP ACK和SQLite持久化；解释任务原子关联及解释HTTP、React固定组件渲染器和浏览器E2E未实现。
   - fixture demo 不是浏览器录屏或真实模型演示；M5 仍需真实模型 smoke 与最终演示交接材料。
 - 必要的复验方式：
   - uv sync --locked --group dev

@@ -49,8 +49,9 @@ def lesson_package() -> LessonPackage:
         graph_content_revision=1,
         markdown="## 引用定位\n选择一个步骤查看解释。",
         components=(
-            LessonComponent("choice-1", ComponentKind.CHOICE_CARD, {"prompt": "哪项更可靠？", "options": ["带引用", "无来源"]}),
-            LessonComponent("step-1", ComponentKind.STEPPER, {"steps": ["检索", "引用", "回答"]}),
+            LessonComponent("choice-1", ComponentKind.MARKDOWN, {"text": "带引用的回答可定位来源。"}),
+            LessonComponent("step-1", ComponentKind.STEPPER, {"steps": [
+                {"title": name, "description": "理解" + name, "slots": {}} for name in ("检索", "引用", "回答")]}),
         ),
     )
 
@@ -68,12 +69,12 @@ def test_sqlite_lesson_repository_restores_package_event_and_explanation_run():
         database = Path(tmpdir) / "learngraph.db"
         lessons = service(database)
         saved = lessons.save_package(lesson_package())
-        event = lessons.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "request_explanation", {"step": 1}))
+        event = lessons.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "request_explanation", {}))
         first_run_id = lessons.explain_event("g1", event.id, "step-1", "req-1")
 
         restored_model = ExplainModel()
         restored = service(database, restored_model)
-        duplicate = restored.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "request_explanation", {"step": 2}))
+        duplicate = restored.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "request_explanation", {}))
         second_run_id = restored.explain_event("g1", event.id, "step-1", "req-2")
         restored_state = SQLiteLessonRepository(database).state("g1")
 
@@ -90,7 +91,7 @@ def test_sqlite_lesson_repository_restores_failed_explanation_for_retry():
         model = FailingThenPassingModel()
         lessons = service(database, model)
         lessons.save_package(lesson_package())
-        event = lessons.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "request_explanation", {"step": 1}))
+        event = lessons.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "request_explanation", {}))
         try:
             lessons.explain_event("g1", event.id, "step-1", "req-1")
         except RuntimeError as exc:

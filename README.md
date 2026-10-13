@@ -2,7 +2,7 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料上传/PDF 解析、中文 BM25 检索、回答引用和资料型图谱/练习生成。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
+当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料上传/PDF 解析、中文 BM25 检索、回答引用和资料型图谱/练习/学习包生成及事件 ACK。当前阶段已收尾，按用户要求暂缓后续开发；[阶段总结与真实测试](docs/demo/stage-review-real-testing.md) 提供测试入口和验收边界。React、解释 HTTP、run/session 持久化与 M5 最终交接尚未完成。
 
 ## 开发准备
 
@@ -106,7 +106,7 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/runs/$($run.run_id)/citations/C1"
 
 `goal_id` / `node_id` 必须一起提供，同 session 绑定同一个目标/节点；换节点需新 session。上下文包含已确认目标、发布版本、当前节点、直接前置依赖与练习表现，不包含私有答案。推荐针对整个目标，使用已有服务端规则；`available_minutes` 可省略，提供时必须为正整数。节点不存在返回 404，未发布/未初始化/版本过期的只读请求返回 409；run 内装配失败记录为 `failed`。图谱变化不会自动清空或迁移学习成绩，需后续显式同步用例。
 
-每轮独立装配工具与上下文，工具参数不接受目标/节点改写。资料只检索当前目标和节点均显式绑定的文档；`read_document_chunk` 只接受本轮检索返回的 `citation_id`。默认 `mode: runner` 使用只读工具，显式 `mode: teaching` 增加 `create_exercise`。目前不读取历史对话。可手动使用 `npm.cmd run demo:learning-agent -- --real` 调配置好的供应商，可能产生费用，业务数据仍是 fixture；真实模式只执行资料问答，本次未执行。
+每轮独立装配工具与上下文，工具参数不接受目标/节点改写。资料只检索当前目标和节点均显式绑定的文档；`read_document_chunk` 只接受本轮检索返回的 `citation_id`。默认 `mode: runner` 使用只读工具，real API 的显式 `mode: teaching` 增加 `create_exercise` 和 `create_lesson`。目前不读取历史对话。可手动使用 `npm.cmd run demo:learning-agent -- --real` 调配置好的供应商，可能产生费用，业务数据仍是 fixture；真实模式只执行资料问答，本次未执行。
 
 完成的节点回答在 GET run 与 SSE 中返回 `output.citation_map` 和 `output.unverified_citation_ids`。C1 等编号仅在本轮有效，来源记录含文档/片段 ID、版本、引用位置、内容摘要值、是否被引用及 `valid/stale/unavailable` 状态。未知编号保留为未验证，不提供来源；引用原文接口未知返回 404，内容变化或解绑返回 409。上面原文命令仅在本轮确实返回 C1 时可用。GET run 保留完成时快照，点击原文重新校验当前绑定和内容；无绑定/空召回要求明确说明资料不足，普通知识解释标注“非基于上传资料”。
 
@@ -138,7 +138,7 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 
 上传返回 202，状态依次为 uploaded、parsing，终态为 ready/failed/unsupported。扫描 PDF 为 unsupported/needs_ocr；加密、坏 PDF、坏编码和不可读文本也明确拒绝，不支持 OCR、Office 文件。重启把未完成解析标为 failed/interrupted；`POST /api/documents/{id}/reparse` 复用原文件，ready 时返回已有结果。解析成功状态与全文/chunk/FTS 在同一事务提交，只有 ready 上传可检索。
 
-`DELETE /api/goals/{goal_id}/document-bindings` 使用相同 JSON body 解绑；解绑目标也移除它的节点绑定。`DELETE /api/documents/{id}` 删除原文件、索引及所有绑定，晚到解析结果不会恢复已删除资料，历史来源点击降级为 unavailable。chunk 接口每页最多 50 块，返回页码或 heading、原文 offsets 和 SHA256；节点 Agent、图谱和练习复用这些资料，各自保存来源表。资料型学习页 grounding 和 React 原文页仍待实现。
+`DELETE /api/goals/{goal_id}/document-bindings` 使用相同 JSON body 解绑；解绑目标也移除它的节点绑定。`DELETE /api/documents/{id}` 删除原文件、索引及所有绑定，晚到解析结果不会恢复已删除资料，历史来源点击降级为 unavailable。chunk 接口每页最多 50 块，返回页码或 heading、原文 offsets 和 SHA256；节点 Agent、图谱、练习和学习包复用这些资料，各自保存来源表。React 原文页仍待实现。
 
 启动必须有 SQLite FTS5。若报错 `SQLite FTS5 is required`，安装 Python 3.13+ 的官方发行版（含 FTS5）并用该解释器重新创建项目虚拟环境、执行 `uv sync --locked --group dev`；可用 `uv run --locked python -c "import sqlite3; sqlite3.connect(':memory:').execute('create virtual table probe using fts5(text)'); print('FTS5 OK')"` 验证。当前解析恢复按单个 API 进程使用同一数据库设计。
 
@@ -182,6 +182,21 @@ real API 的按钮出题入口是 `POST /api/goals/{goal_id}/nodes/{node_id}/exe
 
 operation 与题目（含来源表）持久化于 SQLite；run/root 关联仍仅在当前进程可查询，重启后不能用旧 run ID 重试。当前只有调用次数/步骤/工具次数和协作取消限制，完整 token/context/deadline 预算及跨 planning/learning/document 事务仍待完成。
 
+## 生成学习包与事件 ACK
+
+real API 的 `POST /api/goals/{goal_id}/nodes/{node_id}/lessons` 接受 `{"session_id":"lesson-1","request_id":"generate-1","purpose":"学习当前节点","exercise_ids":[]}`，返回 202 run；完成后读取 `output.lesson`。题卡只引用显式选择的同目标/节点/内容版本已有题目，最多三道；题目生成与正式作答仍走 exercises/attempts。教学工具 `create_lesson` 与按钮使用同一用例和共享模型预算。
+
+| 方法与路径 | 结果 |
+| --- | --- |
+| GET /api/goals/{goal_id}/nodes/{node_id}/lessons | 该节点包列表，version 降序，包含历史包 |
+| GET /api/goals/{goal_id}/lessons/{package_id} | 固定组件、来源表、outdated |
+| GET /api/goals/{goal_id}/lessons/{package_id}/citations/{citation_id} | 由该包来源表定位原文 |
+| POST /api/goals/{goal_id}/lessons/{package_id}/events | ACK 首次事件，不调用模型、不写成绩 |
+
+schema_version 1 支持 markdown、quiz_choice、stepper、comparison_table，章节 ID 固定为 chapter；含章节最多20块。无绑定为 general，有绑定时实际检索片段进入上下文并保存独立 citation_map；空召回失败，最多一次 repair，保存前复验上下文、来源与题目。包不可覆盖，显式新任务生成新 ID 和递增 version；同 root task 同参数复用，异参数冲突。
+
+事件 body 示例：`{"event_id":"read-1","package_version":1,"component_id":"chapter","action":"mark_read","payload":{}}`。stepper 使用 `step_changed` 与 `{"step":0}`（从0开始）；`request_explanation` 使用空 payload，当前仅记录请求 ACK，没有解释 HTTP。重复 event_id 且包/version/组件/action 相同返回首次 payload，冲突返回409；非法动作/字段/版本返回422。过期包或旧 schema 包只读，拒绝新事件，已保存事件仍可重试。历史包从 SQLite 重启恢复，来源删除后标 unavailable；run/root 关联仍仅在进程内，重启后不能用旧 run ID 重试。React 渲染与解释任务原子关联待后续，当前不宣称 M4B 全部完成。
+
 ## 常用命令
 
 - npm.cmd run ci
@@ -202,7 +217,7 @@ operation 与题目（含来源表）持久化于 SQLite；run/root 关联仍仅
 - src/learngraph_lite/agent_core/：独立 Agent 内核，包含模型协议、工具注册表、Runner 和预算控制。
 - src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入、运行摘要、公共事件和终态。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。
-- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run 路由、目标澄清/图谱规划、资料上传/绑定/检索、节点只读接口和练习生成/作答接口；HTTP 调用应用层用例。
+- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run 路由、目标澄清/图谱规划、资料上传/绑定/检索、节点只读接口、练习生成/作答、学习包及事件 ACK 接口；HTTP 调用应用层用例。
 - src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson 的最小 SQLite repository、jieba/FTS5 BM25 检索、pypdf 子进程解析与官方 OpenAI SDK Chat Completions gateway；完整业务持久化和前端原文页仍待接入。
 
 更多边界见 docs/ARCHITECTURE.md。

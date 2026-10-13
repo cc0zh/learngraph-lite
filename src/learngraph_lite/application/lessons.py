@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from copy import deepcopy
+from threading import RLock
+from typing import Callable, Protocol, TypeVar
 
 from learngraph_lite.application.agent import AgentLoop, RunRequest
 from learngraph_lite.application.learning import LearningService
 from learngraph_lite.domain.learning.exercises import Attempt
 from learngraph_lite.domain.lessons import LessonEvent, LessonPackage, ack_event, build_lesson_package
+
+T = TypeVar("T")
+
+
+class LessonError(ValueError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -17,6 +27,7 @@ class LessonState:
     events: dict[str, LessonEvent] = field(default_factory=dict)
     explanation_runs: dict[tuple[str, str], str] = field(default_factory=dict)
     failed_explanations: set[tuple[str, str]] = field(default_factory=set)
+    generation_operations: dict[str, dict] = field(default_factory=dict)
 
 
 class LessonRepository(Protocol):
@@ -24,49 +35,80 @@ class LessonRepository(Protocol):
 
     def save(self, goal_id: str, state: LessonState) -> None: ...
 
+    def mutate(self, goal_id: str, update: Callable[[LessonState], T]) -> T: ...
+
 
 @dataclass
 class InMemoryLessonRepository:
     _states: dict[str, LessonState] = field(default_factory=dict)
+    _lock: RLock = field(default_factory=RLock, repr=False)
 
     def state(self, goal_id: str) -> LessonState:
-        return self._states.setdefault(goal_id, LessonState())
+        with self._lock:
+            return deepcopy(self._states.get(goal_id, LessonState()))
 
     def save(self, goal_id: str, state: LessonState) -> None:
-        self._states[goal_id] = state
+        with self._lock:
+            self._states[goal_id] = deepcopy(state)
+
+    def mutate(self, goal_id: str, update: Callable[[LessonState], T]) -> T:
+        with self._lock:
+            state = deepcopy(self.state(goal_id))
+            result = update(state)
+            self._states[goal_id] = deepcopy(state)
+            return result
 
 
 class LessonService:
-    def __init__(self, repository: LessonRepository, learning: LearningService, loop: AgentLoop):
+    def __init__(self, repository: LessonRepository, learning: LearningService, loop: AgentLoop,
+                 context: Callable[[str, str], dict] | None = None):
         self._repository = repository
         self._learning = learning
         self._loop = loop
+        self._context = context or learning.context
 
     def save_package(self, package: LessonPackage) -> LessonPackage:
-        state = self._repository.state(package.goal_id)
-        state.packages[package.id] = build_lesson_package(
+        validated = build_lesson_package(
             package_id=package.id,
             goal_id=package.goal_id,
             node_id=package.node_id,
             graph_content_revision=package.graph_content_revision,
             markdown=package.markdown,
             components=package.components,
+            schema_version=package.schema_version, version=package.version, title=package.title,
+            source_mode=package.source_mode, citation_ids=package.citation_ids, citation_map=package.citation_map,
         )
-        self._repository.save(package.goal_id, state)
-        return state.packages[package.id]
+        self._learning.validate_lesson_exercises(validated)
+
+        def commit(state):
+            existing = state.packages.get(package.id)
+            if existing is not None and existing != validated:
+                raise LessonError("lesson_conflict", "A saved lesson package is immutable.")
+            state.packages[package.id] = validated
+            return validated
+        return self._repository.mutate(package.goal_id, commit)
 
     def ack_event(self, goal_id: str, event: LessonEvent) -> LessonEvent:
-        state = self._repository.state(goal_id)
-        existing = state.events.get(event.id)
-        if existing is not None:
-            return existing
-        package = state.packages.get(event.package_id)
-        if package is None:
-            raise ValueError("unknown lesson package")
-        accepted = ack_event(package, event)
-        state.events[event.id] = accepted
-        self._repository.save(goal_id, state)
-        return accepted
+        def commit(state):
+            existing = state.events.get(event.id)
+            if existing is not None:
+                if (existing.package_id, existing.component_id, existing.action, existing.package_version) != (
+                        event.package_id, event.component_id, event.action, event.package_version):
+                    raise LessonError("event_conflict", "Event ID belongs to a different component or version.")
+                return existing
+            package = state.packages.get(event.package_id)
+            if package is None:
+                raise LessonError("lesson_not_found", "Unknown lesson package.")
+            current = self._context(goal_id, package.node_id)
+            if current["content_revision"] != package.graph_content_revision:
+                raise LessonError("outdated_lesson", "Historical lessons cannot accept new events.")
+            try:
+                accepted = ack_event(package, event)
+            except ValueError as exc:
+                raise LessonError("invalid_lesson_event", str(exc)) from exc
+            state.events[event.id] = accepted
+            return accepted
+        return self._repository.mutate(goal_id, commit)
 
     def submit_choice_answer(self, goal_id: str, exercise_id: str, selected_option_id: str, attempt_id: str) -> Attempt:
         return self._learning.submit_answer(goal_id, exercise_id, selected_option_id, attempt_id)
@@ -87,11 +129,15 @@ class LessonService:
                 idempotency_key=f"lesson:{event_id}:{slot}:{request_id if key in state.failed_explanations else 'root'}",
             )
         )
-        if record.status == "completed":
-            state.explanation_runs[key] = record.run_id
-            state.failed_explanations.discard(key)
-            self._repository.save(goal_id, state)
-            return record.run_id
-        state.failed_explanations.add(key)
-        self._repository.save(goal_id, state)
+        def save_result(current):
+            if record.status == "completed":
+                current.explanation_runs.setdefault(key, record.run_id)
+                current.failed_explanations.discard(key)
+                return current.explanation_runs[key]
+            if key not in current.explanation_runs:
+                current.failed_explanations.add(key)
+            return None
+        run_id = self._repository.mutate(goal_id, save_result)
+        if run_id is not None:
+            return run_id
         raise RuntimeError(record.error or "explanation run failed")

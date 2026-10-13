@@ -255,7 +255,8 @@ def _save_lesson(service: LessonService):
         node_id="rag-goal",
         graph_content_revision=1,
         markdown="## RAG",
-        components=(LessonComponent("choice-1", ComponentKind.CHOICE_CARD, {"prompt": "选依据", "options": ["引用", "猜测"]}),),
+        components=(LessonComponent("choice-1", ComponentKind.STEPPER, {"steps": [
+            {"title": title, "description": title, "slots": {}} for title in ("引用", "猜测")]}),),
     )
     return service.save_package(package)
 
@@ -263,17 +264,17 @@ def _save_lesson(service: LessonService):
 def case_lesson_event_idempotent() -> str:
     service = _lesson_service()
     _save_lesson(service)
-    first = service.ack_event("g1", LessonEvent("event-1", "lp1", "choice-1", "select", {"option": "引用"}))
-    second = service.ack_event("g1", LessonEvent("event-1", "lp1", "choice-1", "select", {"option": "猜测"}))
-    assert first is second
-    assert second.payload["option"] == "引用"
+    first = service.ack_event("g1", LessonEvent("event-1", "lp1", "choice-1", "step_changed", {"step": 0}))
+    second = service.ack_event("g1", LessonEvent("event-1", "lp1", "choice-1", "step_changed", {"step": 1}))
+    assert first == second
+    assert second.payload["step"] == 0
     return "duplicate event id preserved first payload"
 
 
 def case_lesson_explanation_idempotent() -> str:
     service = _lesson_service()
     _save_lesson(service)
-    service.ack_event("g1", LessonEvent("event-1", "lp1", "choice-1", "request_explanation", {"option": "引用"}))
+    service.ack_event("g1", LessonEvent("event-1", "lp1", "choice-1", "request_explanation", {}))
     first = service.explain_event("g1", "event-1", "choice-1", "req-1")
     second = service.explain_event("g1", "event-1", "choice-1", "req-2")
     assert first == second

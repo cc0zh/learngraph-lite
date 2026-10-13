@@ -19,6 +19,7 @@ from learngraph_lite.domain.learning.exercises import (
 )
 from learngraph_lite.domain.learning.mastery import AttemptResult, score_mastery
 from learngraph_lite.domain.learning.recommendations import NextAction, recommend_next_action
+from learngraph_lite.domain.lessons import ComponentKind, LessonPackage
 
 T = TypeVar("T")
 
@@ -75,6 +76,23 @@ class LearningService:
 
     def start_goal(self, graph: GraphSnapshot) -> None:
         self._repository.save(graph.goal_id, LearningState(graph=graph))
+
+    def validate_lesson_exercises(self, package: LessonPackage) -> None:
+        state = self._repository.get(package.goal_id)
+        _require_node(state.graph, package.node_id)
+        if state.graph.content_revision != package.graph_content_revision:
+            raise ValueError("lesson content revision is outdated")
+        exercise_ids = [component.props["exercise_id"] for component in package.components
+                        if component.kind == ComponentKind.QUIZ_CHOICE]
+        if len(exercise_ids) > 3 or len(set(exercise_ids)) != len(exercise_ids):
+            raise ValueError("lesson supports at most three unique exercises")
+        for component in package.components:
+            if component.kind != ComponentKind.QUIZ_CHOICE:
+                continue
+            exercise = state.exercises.get(component.props["exercise_id"])
+            if exercise is None or (exercise.goal_id, exercise.node_id, exercise.graph_content_revision) != (
+                    package.goal_id, package.node_id, package.graph_content_revision):
+                raise ValueError("lesson exercise must belong to the same goal, node and content revision")
 
     def learn_node(self, goal_id: str, node_id: str, user_text: str, request_id: str) -> str:
         if self._loop is None:

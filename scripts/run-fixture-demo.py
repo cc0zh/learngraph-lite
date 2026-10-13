@@ -78,13 +78,14 @@ def build_demo() -> dict[str, str]:
             graph_content_revision=graph.content_revision,
             markdown="## RAG 学习页\n先理解检索、生成和引用之间的边界。",
             components=(
-                LessonComponent("choice-1", ComponentKind.CHOICE_CARD, {"prompt": "回答应依据什么？", "options": ["引用片段", "模型猜测"]}),
-                LessonComponent("steps-1", ComponentKind.STEPPER, {"steps": ["检索资料", "组织回答", "返回引用"]}),
+                LessonComponent("choice-1", ComponentKind.QUIZ_CHOICE, {"exercise_id": "rag-goal-0"}),
+                LessonComponent("steps-1", ComponentKind.STEPPER, {"steps": [
+                    {"title": title, "description": title, "slots": {}} for title in ("检索资料", "组织回答", "返回引用")]}),
                 LessonComponent("table-1", ComponentKind.COMPARISON_TABLE, {"columns": ["方式", "风险"], "rows": [["无引用", "不可核查"], ["有引用", "可定位来源"]]}),
             ),
         )
     )
-    event = lessons.ack_event("demo-goal", LessonEvent("event-1", "lesson-1", "choice-1", "request_explanation", {"choice": "引用片段"}))
+    event = lessons.ack_event("demo-goal", LessonEvent("event-1", "lesson-1", "choice-1", "request_explanation", {}))
     explanation_run_id = lessons.explain_event("demo-goal", event.id, "choice-1", "explain-1")
 
     proposals = GraphProposalService(InMemoryProposalRepository())

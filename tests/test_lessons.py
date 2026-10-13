@@ -39,8 +39,9 @@ def lesson_package() -> LessonPackage:
         graph_content_revision=1,
         markdown="## 引用定位\n选择一个步骤查看解释。",
         components=(
-            LessonComponent("choice-1", ComponentKind.CHOICE_CARD, {"prompt": "哪项更可靠？", "options": ["带引用", "无来源"]}),
-            LessonComponent("step-1", ComponentKind.STEPPER, {"steps": ["检索", "引用", "回答"]}),
+            LessonComponent("choice-1", ComponentKind.MARKDOWN, {"text": "带引用的回答可定位来源。"}),
+            LessonComponent("step-1", ComponentKind.STEPPER, {"steps": [
+                {"title": name, "description": "理解" + name, "slots": {}} for name in ("检索", "引用", "回答")]}),
             LessonComponent("table-1", ComponentKind.COMPARISON_TABLE, {"columns": ["策略", "优点"], "rows": [["分块", "可定位"]]}),
         ),
     )
@@ -58,7 +59,7 @@ def services(model=None):
 def test_lesson_package_rejects_unknown_or_executable_content():
     lessons, _, _ = services()
     saved = lessons.save_package(lesson_package())
-    assert saved.components[0].kind == ComponentKind.CHOICE_CARD
+    assert saved.components[0].kind == ComponentKind.MARKDOWN
 
     bad = LessonPackage(
         id="bad",
@@ -95,9 +96,9 @@ def test_lesson_events_are_idempotent_and_do_not_change_scores():
     lessons, learning, _ = services()
     lessons.save_package(lesson_package())
     before = learning.mastery("g1", "citations")
-    event = LessonEvent("event-1", "lp1", "choice-1", "select", {"option": "带引用"})
+    event = LessonEvent("event-1", "lp1", "step-1", "step_changed", {"step": 0})
     first = lessons.ack_event("g1", event)
-    second = lessons.ack_event("g1", LessonEvent("event-1", "lp1", "choice-1", "select", {"option": "无来源"}))
+    second = lessons.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "step_changed", {"step": 1}))
     after = learning.mastery("g1", "citations")
     assert first == second
     assert before == after
@@ -114,7 +115,7 @@ def test_lesson_choice_submission_reuses_formal_learning_scoring():
 def test_explanation_run_is_idempotent_by_event_and_slot_and_retry_after_failure():
     lessons, _, model = services()
     lessons.save_package(lesson_package())
-    event = lessons.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "request_explanation", {"step": 1}))
+    event = lessons.ack_event("g1", LessonEvent("event-1", "lp1", "step-1", "request_explanation", {}))
 
     first_run_id = lessons.explain_event("g1", event.id, "step-1", "req-1")
     second_run_id = lessons.explain_event("g1", event.id, "step-1", "req-2")

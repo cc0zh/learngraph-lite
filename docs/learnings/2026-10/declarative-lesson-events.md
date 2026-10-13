@@ -11,9 +11,9 @@
 ## 怎么想
 
 - LessonPackage 保存 node_id 和 graph_content_revision，用于后续判断内容是否过期。
-- 组件只允许有限 kind，例如 choice_card、stepper、comparison_table。
+- schema1组件只允许markdown、quiz_choice、stepper、comparison_table；旧choice_card仅只读兼容。
 - Event ACK 使用 event_id 幂等，重复提交返回同一业务事件。
-- 解释任务使用 source_event_id + slot 建立逻辑幂等，网络重试不会创建多个初始 run。
+- 解释任务应使用source_event_id + slot建立逻辑幂等，并与root task、首个run、输入原子保存。当前离线原型仅保存成功run关联，尚未满足完整原子性与重启恢复要求，未开放解释HTTP。
 - 普通学习页事件不改变 mastery；正式作答必须调用练习评分用例。
 
 ## 常见陷阱

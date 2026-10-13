@@ -14,6 +14,8 @@ from learngraph_lite.application.agent import PreparedRun, RunRequest
 from learngraph_lite.application.document_agent import DOCUMENT_INSTRUCTIONS, DocumentTurn, locate_source, project_sources
 from learngraph_lite.application.documents import DocumentAccessError, DocumentRepository, DocumentService
 from learngraph_lite.application.exercise_generation import ExerciseError, ExerciseInput, GenerateExercise
+from learngraph_lite.application.lesson_generation import GenerateLesson, LessonInput
+from learngraph_lite.application.lessons import LessonError, LessonRepository
 from learngraph_lite.application.learning import LearningRepository, LearningService, StaleLearningGraphError
 from learngraph_lite.application.planning import PlanningRepository, PlanningState
 from learngraph_lite.domain.learning import GraphStatus
@@ -43,12 +45,13 @@ class NextActionInput(ContextInput):
 
 class LearningContext:
     def __init__(self, planning: PlanningRepository, learning: LearningRepository,
-                 documents: DocumentRepository | None = None):
+                 documents: DocumentRepository | None = None, lessons: LessonRepository | None = None):
         self._planning = planning
         self._learning_repository = learning
         self._learning = LearningService(learning)
         self._document_repository = documents
         self._documents = DocumentService(documents) if documents is not None else None
+        self._lessons = lessons
 
     def locate_run_source(self, goal_id: str, node_id: str | None, source: dict) -> dict:
         if self._documents is None:
@@ -146,6 +149,22 @@ class LearningContext:
                 ExerciseInput, create_exercise,
             ))
             generation_instructions = "create_exercise 可创建每任务一批单选题；题量1至3，使用相同参数重试。仅保存成功才算出题。来源模式以工具返回为准；题目 citation_map 属于该题，不能用作回答的引用表。正式答案和解析由作答接口返回，不猜测或披露正确选项。"
+            if self._lessons is not None:
+                lesson_generator = GenerateLesson(self._lessons, self._learning_repository, self.context, self._document_repository)
+
+                def create_lesson(args: dict):
+                    read({})
+                    try:
+                        result = lesson_generator.generate(goal_id, node_id, root_task_id, args, model)
+                    except (LessonError, DocumentAccessError) as exc:
+                        raise ToolError(f"{exc.code}: {exc}") from exc
+                    generated["lesson"] = result["lesson"]
+                    return result
+                tools.register(Tool.from_model(
+                    "create_lesson", "Generate a fixed-component lesson referencing selected existing public exercises.",
+                    LessonInput, create_lesson,
+                ))
+                generation_instructions += "create_lesson 每任务保存一个声明式学习包，可使用刚生成的 exercise_ids；包的引用表也独立于回答和题目。"
 
         def project(text: str) -> dict:
             return {**(turn.project_output(text) if turn is not None else {}), **generated}

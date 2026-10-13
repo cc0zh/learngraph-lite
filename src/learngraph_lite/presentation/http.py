@@ -19,10 +19,13 @@ from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunR
 from learngraph_lite.application.documents import DocumentAccessError
 from learngraph_lite.application.document_imports import DocumentImports, MAX_UPLOAD_BYTES
 from learngraph_lite.application.exercise_generation import ExerciseError, GenerateExercise
+from learngraph_lite.application.lesson_generation import GenerateLesson, LessonInput
+from learngraph_lite.application.lessons import LessonError, LessonService
 from learngraph_lite.application.learning_agent import LearningContext, LearningContextError
 from learngraph_lite.application.planning import PlanningError, PlanningService
 from learngraph_lite.application.planning_generation import CandidateGraph
 from learngraph_lite.domain.learning import GoalDraft, GraphSnapshot, GraphValidationError, RevisionConflict
+from learngraph_lite.domain.lessons import LessonComponent, LessonEvent
 from learngraph_lite.presentation.sse import encode_snapshot, encode_sse, public_run
 
 
@@ -78,6 +81,23 @@ class PublicExercise(BaseModel):
     citation_ids: list[str] = Field(default_factory=list)
     citation_map: dict[str, AnswerSource] = Field(default_factory=dict)
     unverified_citation_ids: list[str] = Field(default_factory=list)
+
+
+class PublicLesson(BaseModel):
+    id: str
+    goal_id: str
+    node_id: str
+    graph_content_revision: int
+    schema_version: int
+    version: int
+    title: str
+    markdown: str
+    components: list[LessonComponent]
+    source_mode: Literal["general", "documents"]
+    citation_ids: list[str]
+    citation_map: dict[str, AnswerSource]
+    unverified_citation_ids: list[str]
+    outdated: bool
 
 
 class PlanningView(BaseModel):
@@ -147,6 +167,7 @@ class AnswerSources(BaseModel):
     exercises: list[PublicExercise] | None = None
     source_mode: Literal["general", "documents"] | None = None
     planning: PlanningView | None = None
+    lesson: PublicLesson | None = None
 
 
 class SubmitExercises(BaseModel):
@@ -162,6 +183,21 @@ class SubmitAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid")
     submission_id: Identifier
     selected_option_id: Identifier
+
+
+class SubmitLesson(LessonInput):
+    session_id: Identifier
+    request_id: Identifier
+    retry_of_run_id: Identifier | None = None
+
+
+class SubmitLessonEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    event_id: Identifier
+    package_version: int = Field(ge=1)
+    component_id: Identifier
+    action: Literal["mark_read", "step_changed", "request_explanation"]
+    payload: dict = Field(default_factory=dict)
 
 
 class PublicDocument(BaseModel):
@@ -241,6 +277,8 @@ def create_app(
     planning: PlanningService | None = None,
     on_publish: Callable[[GraphSnapshot], None] | None = None,
     document_imports: DocumentImports | None = None,
+    lessons: GenerateLesson | None = None,
+    lesson_events: LessonService | None = None,
 ) -> FastAPI:
     """Create a process-local API, with cooperative shutdown and snapshot-first SSE."""
     if not math.isfinite(heartbeat_seconds) or heartbeat_seconds <= 0:
@@ -312,6 +350,11 @@ def create_app(
     @app.exception_handler(ExerciseError)
     async def exercise_error(request: Request, exc: ExerciseError):
         return _error(404 if exc.code == "exercise_not_found" else 409, exc.code, str(exc))
+
+    @app.exception_handler(LessonError)
+    async def lesson_error(request: Request, exc: LessonError):
+        status = 404 if exc.code == "lesson_not_found" else 422 if exc.code == "invalid_lesson_event" else 409
+        return _error(status, exc.code, str(exc))
 
     @app.exception_handler(PlanningError)
     async def planning_error(request: Request, exc: PlanningError):
@@ -455,6 +498,31 @@ def create_app(
         def submit_answer(goal_id: Identifier, exercise_id: Identifier, body: SubmitAnswer):
             return exercises.submit_answer(goal_id, exercise_id, body.selected_option_id, body.submission_id)
 
+    if lessons is not None:
+        @app.post("/api/goals/{goal_id}/nodes/{node_id}/lessons", status_code=202,
+                  response_model=PublicRun, response_model_exclude_unset=True)
+        def generate_lesson(goal_id: Identifier, node_id: Identifier, body: SubmitLesson):
+            return public_run(loop.submit(RunRequest(
+                session_id=body.session_id, user_text="生成学习页", idempotency_key=body.request_id,
+                mode="lesson", goal_id=goal_id, node_id=node_id, lesson_purpose=body.purpose,
+                lesson_exercise_ids=tuple(body.exercise_ids), retry_of_run_id=body.retry_of_run_id,
+            )))
+
+        @app.get("/api/goals/{goal_id}/nodes/{node_id}/lessons")
+        def list_lessons(goal_id: Identifier, node_id: Identifier):
+            return lessons.list_packages(goal_id, node_id)
+
+        @app.get("/api/goals/{goal_id}/lessons/{package_id}", response_model=PublicLesson)
+        def get_lesson(goal_id: Identifier, package_id: Identifier):
+            return lessons.get_package(goal_id, package_id)
+
+        if lesson_events is not None:
+            @app.post("/api/goals/{goal_id}/lessons/{package_id}/events")
+            def lesson_event(goal_id: Identifier, package_id: Identifier, body: SubmitLessonEvent):
+                accepted = lesson_events.ack_event(goal_id, LessonEvent(
+                    body.event_id, package_id, body.component_id, body.action, body.payload, body.package_version))
+                return {"event": asdict(accepted)}
+
     if learning_context is not None:
         def located(goal_id, node_id, source):
             chunk = learning_context.locate_run_source(goal_id, node_id, source)
@@ -478,6 +546,12 @@ def create_app(
             @app.get("/api/goals/{goal_id}/exercises/{exercise_id}/citations/{citation_id}", response_model=LocatedSource)
             def locate_exercise_citation(goal_id: Identifier, exercise_id: Identifier, citation_id: Identifier):
                 node_id, source = exercises.locate_citation(goal_id, exercise_id, citation_id)
+                return located(goal_id, node_id, source)
+
+        if lessons is not None:
+            @app.get("/api/goals/{goal_id}/lessons/{package_id}/citations/{citation_id}", response_model=LocatedSource)
+            def locate_lesson_citation(goal_id: Identifier, package_id: Identifier, citation_id: Identifier):
+                node_id, source = lessons.locate_citation(goal_id, package_id, citation_id)
                 return located(goal_id, node_id, source)
 
         @app.get("/api/goals/{goal_id}/nodes/{node_id}/context")

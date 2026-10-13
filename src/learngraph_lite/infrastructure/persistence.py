@@ -704,34 +704,38 @@ class SQLiteLessonRepository:
         self._initialize()
 
     def state(self, goal_id: str) -> LessonState:
-        with closing(self._connect()) as connection:
-            package_rows = connection.execute(
-                """
-                select package_id, node_id, graph_content_revision, markdown, components_json
-                from lesson_packages
-                where goal_id = ?
-                order by package_id
-                """,
-                (goal_id,),
-            ).fetchall()
-            event_rows = connection.execute(
-                """
-                select event_id, package_id, component_id, action, payload_json
-                from lesson_events
-                where goal_id = ?
-                order by event_id
-                """,
-                (goal_id,),
-            ).fetchall()
-            explanation_rows = connection.execute(
-                """
-                select event_id, slot, run_id, failed
-                from lesson_explanations
-                where goal_id = ?
-                order by event_id, slot
-                """,
-                (goal_id,),
-            ).fetchall()
+        with closing(self._connect()) as connection, connection:
+            connection.execute("begin")
+            return self._state(connection, goal_id)
+
+    def _state(self, connection, goal_id) -> LessonState:
+        package_rows = connection.execute(
+            """
+            select package_id, node_id, graph_content_revision, markdown, components_json, metadata_json
+            from lesson_packages
+            where goal_id = ?
+            order by package_id
+            """,
+            (goal_id,),
+        ).fetchall()
+        event_rows = connection.execute(
+            """
+            select event_id, package_id, component_id, action, payload_json, package_version
+            from lesson_events
+            where goal_id = ?
+            order by event_id
+            """,
+            (goal_id,),
+        ).fetchall()
+        explanation_rows = connection.execute(
+            """
+            select event_id, slot, run_id, failed
+            from lesson_explanations
+            where goal_id = ?
+            order by event_id, slot
+            """,
+            (goal_id,),
+        ).fetchall()
         packages = {
             row[0]: LessonPackage(
                 id=row[0],
@@ -743,6 +747,12 @@ class SQLiteLessonRepository:
                     LessonComponent(id=item["id"], kind=ComponentKind(item["kind"]), props=dict(item["props"]))
                     for item in json.loads(row[4])
                 ),
+                schema_version=json.loads(row[5]).get("schema_version", 0),
+                version=json.loads(row[5]).get("version", 1),
+                title=json.loads(row[5]).get("title", "学习页"),
+                source_mode=json.loads(row[5]).get("source_mode", "general"),
+                citation_ids=tuple(json.loads(row[5]).get("citation_ids", ())),
+                citation_map=json.loads(row[5]).get("citation_map", {}),
             )
             for row in package_rows
         }
@@ -752,7 +762,7 @@ class SQLiteLessonRepository:
                 package_id=row[1],
                 component_id=row[2],
                 action=row[3],
-                payload=dict(json.loads(row[4])),
+                payload=dict(json.loads(row[4])), package_version=int(row[5]),
             )
             for row in event_rows
         }
@@ -771,83 +781,104 @@ class SQLiteLessonRepository:
             events=events,
             explanation_runs=explanation_runs,
             failed_explanations=failed_explanations,
+            generation_operations={row[0]: {"fingerprint": row[1], "id": row[2]} for row in connection.execute(
+                "select operation_key, fingerprint, package_id from lesson_generation_operations where goal_id=?", (goal_id,))},
         )
 
     def save(self, goal_id: str, state: LessonState) -> None:
-        with closing(self._connect()) as connection:
-            with connection:
-                connection.execute("delete from lesson_packages where goal_id = ?", (goal_id,))
-                connection.execute("delete from lesson_events where goal_id = ?", (goal_id,))
-                connection.execute("delete from lesson_explanations where goal_id = ?", (goal_id,))
-                connection.executemany(
-                    """
-                    insert into lesson_packages(
-                        goal_id,
-                        package_id,
-                        node_id,
-                        graph_content_revision,
-                        markdown,
-                        components_json
-                    )
-                    values (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        (
-                            goal_id,
-                            package.id,
-                            package.node_id,
-                            package.graph_content_revision,
-                            package.markdown,
-                            json.dumps(
-                                [
-                                    {
-                                        "id": component.id,
-                                        "kind": component.kind.value,
-                                        "props": component.props,
-                                    }
-                                    for component in package.components
-                                ],
-                                ensure_ascii=False,
-                                sort_keys=True,
-                            ),
-                        )
-                        for package in state.packages.values()
+        with closing(self._connect()) as connection, connection:
+            self._save(connection, goal_id, state)
+
+    def mutate(self, goal_id: str, update):
+        with closing(self._connect()) as connection, connection:
+            connection.execute("begin immediate")
+            state = self._state(connection, goal_id)
+            result = update(state)
+            self._save(connection, goal_id, state)
+            return result
+
+    def _save(self, connection, goal_id, state):
+        connection.execute("delete from lesson_packages where goal_id = ?", (goal_id,))
+        connection.execute("delete from lesson_events where goal_id = ?", (goal_id,))
+        connection.execute("delete from lesson_explanations where goal_id = ?", (goal_id,))
+        connection.execute("delete from lesson_generation_operations where goal_id = ?", (goal_id,))
+        connection.executemany(
+            """
+            insert into lesson_packages(
+                goal_id,
+                package_id,
+                node_id,
+                graph_content_revision,
+                markdown,
+                components_json, metadata_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    goal_id,
+                    package.id,
+                    package.node_id,
+                    package.graph_content_revision,
+                    package.markdown,
+                    json.dumps(
+                        [
+                            {
+                                "id": component.id,
+                                "kind": component.kind.value,
+                                "props": component.props,
+                            }
+                            for component in package.components
+                        ],
+                        ensure_ascii=False,
+                        sort_keys=True,
                     ),
+                    json.dumps({"schema_version": package.schema_version, "version": package.version,
+                                "title": package.title, "source_mode": package.source_mode,
+                                "citation_ids": package.citation_ids, "citation_map": package.citation_map}, ensure_ascii=False),
                 )
-                connection.executemany(
-                    """
-                    insert into lesson_events(goal_id, event_id, package_id, component_id, action, payload_json)
-                    values (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        (
-                            goal_id,
-                            event.id,
-                            event.package_id,
-                            event.component_id,
-                            event.action,
-                            json.dumps(event.payload, ensure_ascii=False, sort_keys=True),
-                        )
-                        for event in state.events.values()
-                    ),
+                for package in state.packages.values()
+            ),
+        )
+        connection.executemany(
+            """
+            insert into lesson_events(goal_id, event_id, package_id, component_id, action, payload_json, package_version)
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    goal_id,
+                    event.id,
+                    event.package_id,
+                    event.component_id,
+                    event.action,
+                    json.dumps(event.payload, ensure_ascii=False, sort_keys=True), event.package_version,
                 )
-                explanation_keys = set(state.explanation_runs) | state.failed_explanations
-                connection.executemany(
-                    """
-                    insert into lesson_explanations(goal_id, event_id, slot, run_id, failed)
-                    values (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        (
-                            goal_id,
-                            event_id,
-                            slot,
-                            state.explanation_runs.get((event_id, slot)),
-                            1 if (event_id, slot) in state.failed_explanations else 0,
-                        )
-                        for event_id, slot in sorted(explanation_keys)
-                    ),
+                for event in state.events.values()
+            ),
+        )
+        explanation_keys = set(state.explanation_runs) | state.failed_explanations
+        connection.executemany(
+            """
+            insert into lesson_explanations(goal_id, event_id, slot, run_id, failed)
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    goal_id,
+                    event_id,
+                    slot,
+                    state.explanation_runs.get((event_id, slot)),
+                    1 if (event_id, slot) in state.failed_explanations else 0,
                 )
+                for event_id, slot in sorted(explanation_keys)
+            ),
+        )
+
+        connection.executemany(
+            "insert into lesson_generation_operations(goal_id, operation_key, fingerprint, package_id) values (?, ?, ?, ?)",
+            ((goal_id, key, operation["fingerprint"], operation["id"]) for key, operation in state.generation_operations.items()),
+        )
 
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
@@ -890,6 +921,16 @@ class SQLiteLessonRepository:
                     )
                     """
                 )
+
+                columns = {row[1] for row in connection.execute("pragma table_info(lesson_packages)")}
+                if "metadata_json" not in columns:
+                    connection.execute("alter table lesson_packages add column metadata_json text not null default '{}'")
+                columns = {row[1] for row in connection.execute("pragma table_info(lesson_events)")}
+                if "package_version" not in columns:
+                    connection.execute("alter table lesson_events add column package_version integer not null default 1")
+                connection.execute("""create table if not exists lesson_generation_operations (
+                    goal_id text not null, operation_key text not null, fingerprint text not null, package_id text not null,
+                    primary key(goal_id, operation_key))""")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._database_path)

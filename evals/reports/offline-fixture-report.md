@@ -21,7 +21,7 @@
 | document_search_citation | documents | passed | search returned citation tied to a chunk |
 | document_empty_retrieval | documents | passed | empty retrieval refused grounded answer |
 | citation_stale_rejected | documents | passed | citation document version is stale |
-| lesson_rejects_executable_markdown | lessons | passed | lesson markdown cannot contain raw executable HTML |
+| lesson_rejects_executable_markdown | lessons | passed | lesson text cannot contain executable HTML or dangerous URLs |
 | lesson_event_idempotent | lessons | passed | duplicate event id preserved first payload |
 | lesson_explanation_idempotent | lessons | passed | same event and slot reused explanation run |
 | proposal_pending_no_side_effect | proposals | passed | pending proposal did not mutate graph |
