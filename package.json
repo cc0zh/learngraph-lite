@@ -16,6 +16,7 @@
     "release-package": "node scripts/release-package.cjs",
     "test:py": "python scripts/run-python-tests.py",
     "check:py-boundaries": "python scripts/check-python-boundaries.py",
-    "smoke:fixture": "python scripts/run-fixture-smoke.py"
+    "smoke:fixture": "python scripts/run-fixture-smoke.py",
+    "eval:offline": "python evals/run.py"
   }
 }

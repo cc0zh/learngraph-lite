@@ -1,0 +1,27 @@
+{
+  "suite": "offline-m5-fixture",
+  "mode": "fixture",
+  "description": "Deterministic M5 regression cases for implemented LearnGraph Lite slices. These cases do not use a real model.",
+  "cases": [
+    {"id": "goal_clarification_questions", "area": "planning", "title": "目标信息不足时最多返回三条澄清问题"},
+    {"id": "goal_confirm_with_assumptions", "area": "planning", "title": "用户可带默认 assumptions 确认目标"},
+    {"id": "graph_publish_revision", "area": "planning", "title": "候选图谱发布后 revision 和 content_revision 递增"},
+    {"id": "graph_cycle_rejected", "area": "planning", "title": "成环图谱不能发布"},
+    {"id": "learning_node_run_idempotent", "area": "learning", "title": "节点学习 run 按 request_id 幂等"},
+    {"id": "exercise_public_hides_answer", "area": "learning", "title": "公开练习 DTO 不包含标准答案"},
+    {"id": "attempt_first_counted_retry_not_counted", "area": "learning", "title": "同题重答不重复计入掌握度"},
+    {"id": "mastery_reaches_proficient", "area": "learning", "title": "三道不同题且正确率达标后进入 proficient"},
+    {"id": "mastery_can_drop_after_new_wrong", "area": "learning", "title": "新增错题可让掌握度下降"},
+    {"id": "next_action_blocks_until_prereq", "area": "learning", "title": "推荐遵守前置依赖"},
+    {"id": "document_upload_chunks", "area": "documents", "title": "资料上传后生成可定位分块"},
+    {"id": "document_search_citation", "area": "documents", "title": "绑定资料检索返回引用"},
+    {"id": "document_empty_retrieval", "area": "documents", "title": "无命中时明确拒绝无依据回答"},
+    {"id": "citation_stale_rejected", "area": "documents", "title": "资料版本变化后旧引用失效"},
+    {"id": "lesson_rejects_executable_markdown", "area": "lessons", "title": "学习页拒绝可执行 Markdown/HTML"},
+    {"id": "lesson_event_idempotent", "area": "lessons", "title": "学习页事件 ACK 幂等且保留首次载荷"},
+    {"id": "lesson_explanation_idempotent", "area": "lessons", "title": "解释 run 按事件和 slot 幂等"},
+    {"id": "proposal_pending_no_side_effect", "area": "proposals", "title": "Agent 图谱提案 pending 时不改发布图"},
+    {"id": "proposal_accept_updates_graph", "area": "proposals", "title": "接受图谱提案才更新发布图"},
+    {"id": "run_lifecycle_sse_cancel_budget", "area": "agent", "title": "运行生命周期区分取消、预算耗尽和公共 SSE 投影"}
+  ]
+}

@@ -22,6 +22,7 @@ macOS/Linux 使用 npm。Windows 环境问题见 docs/WINDOWS.md。
 - npm.cmd run test:py
 - npm.cmd run check:py-boundaries
 - npm.cmd run smoke:fixture
+- npm.cmd run eval:offline
 - npm.cmd run release-package
 
 ## 当前架构
@@ -39,4 +40,5 @@ macOS/Linux 使用 npm。Windows 环境问题见 docs/WINDOWS.md。
 - 从 AGENTS.md 查阅协作规则；docs/ 是仓库知识正式来源。
 - 阶段计划维护在 docs/exec-plans/active/learngraph-lite-implementation.md。
 - 开源复用记录维护在 docs/references/open-source-reuse.md。
+- 离线评估集在 evals/cases/offline-m5.json，运行 npm.cmd run eval:offline 会生成 evals/reports/offline-fixture-report.md。
 - 未配置真实模型 Key 时只能使用明确标记的 fixture 模式，不能把 fixture 结果当成真实模型能力。
