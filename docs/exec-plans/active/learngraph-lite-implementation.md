@@ -16,7 +16,7 @@
 - [x] M1：新增应用层 AgentLoop，测试幂等、直接生成路径和 Runner 路径分离。
 - [x] M1：新增少量纯领域规则，证明判分/图谱校验不依赖模型或 Runner。
 - [x] M1：新增轻量 import 边界检查并接入 CI。
-- [ ] M1：补 HTTP/SSE 最小生命周期、运行摘要与取消状态的真实路由测试；已完成无依赖公共生命周期与 SSE 投影离线切片，FastAPI 真实路由仍待接入。
+- [x] M1：补 HTTP/SSE 最小生命周期、运行摘要与取消状态的真实路由测试；已完成 FastAPI app factory、后台提交、查询/取消、快照/心跳/后续事件、重连和真实 TCP 关闭验证。
 - [x] M2：目标澄清、确认、图谱草稿/编辑/发布、revision、规划离线 E2E 与 planning state 最小 SQLite 持久化。
 - [x] M3：节点 Agent 学习、单选题生成、服务端判分、进度、下一步离线闭环与 learning state 最小 SQLite 持久化。
 - [x] M4A：TXT/Markdown 文档解析、分块、简单中英文检索、绑定、引用定位、空召回离线切片与 SQLite FTS5 最小适配器。
@@ -37,6 +37,7 @@
 - 2026-10-13：SQLite document retrieval 最小切片完成 `SQLiteDocumentRepository`，持久化文本资料、chunk、目标/节点绑定和引用定位，并用 FTS5 索引现有 `tokenize()` 结果支持中英文检索；真实 PDF 二进制解析、前端原文页、完整业务持久化仍待后续接入。
 - 2026-10-13：SQLite learning persistence 最小切片完成 `SQLiteLearningRepository`，持久化学习图谱、私有练习、作答和节点学习请求幂等结果，验证重新实例化 repository 后可恢复掌握度、下一步推荐和同题重答计分规则；学习页事件、运行生命周期和完整业务 schema 仍待后续接入。
 - 2026-10-13：SQLite lesson persistence 最小切片完成 `SQLiteLessonRepository`，持久化 lesson package、事件 ACK、解释 run 和失败重试状态，验证重新实例化 repository 后可恢复事件幂等和解释重试；React 固定组件渲染器、HTTP ACK 路由、浏览器 E2E 和完整业务 schema 仍待后续接入。
+- 2026-10-13：HTTP/SSE 最小切片完成 FastAPI app factory、明确 fixture 启动入口、后台 run 准入和相同输入去重、取消后的名额保持、原子快照/事件 cursor 与实时心跳、本机 Host/同源写请求边界；本地入口设置有限 Uvicorn 连接关闭等待，再由 lifespan 协作取消并等待工作线程退出。引入锁定的 FastAPI/Uvicorn 与开发 HTTPX，CI/发布校验显式安装 uv 与 Python 依赖。实现仍未连接学习业务 repository。
 
 ## 验收与交接
 
@@ -73,18 +74,32 @@
   - python scripts/check-python-boundaries.py：SQLite lesson persistence 切片通过，输出 Python import boundaries passed。
   - npm.cmd run check:docs：SQLite lesson persistence 切片通过，输出文档骨架检查通过。
   - npm.cmd run ci：SQLite lesson persistence 切片通过，包含 Python 边界检查、47 个 Python 测试和 19 个 Node 模板工具测试。
+  - uv sync --locked --group dev / uv lock --check：HTTP/SSE 锁定依赖安装与一致性检查通过。
+  - npm.cmd run ci：HTTP/SSE 切片通过，包含 Python 边界检查、57 个 Python 测试（新增 10 个 HTTP/TCP 用例）和 19 个 Node 模板工具测试；shutdown 用例主动触发 graceful timeout，预期的 ASGI CancelledError 日志不代表测试失败。
+  - npm.cmd run eval:offline：HTTP/SSE 切片回归通过，20/20 offline fixture eval cases passed。
+  - npm.cmd run smoke:fixture：通过；独立 Uvicorn 进程与真实 TCP 手工 smoke 也通过 model/status、202 提交和 SSE 完成。
+  - npm.cmd run check:docs / npm.cmd run check:actions / git diff --check：文档骨架、Action 固定 SHA 和空白检查通过。
 - 未执行的检查、阻塞和遗留事项：
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
-  - FastAPI/React/P1 功能尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
-  - M1 真实 HTTP/SSE 路由测试未执行；当前只验证应用层生命周期与 presentation SSE 编码，不声称已完成 FastAPI 路由。
+  - React/P1 与完整业务 HTTP 尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
+  - HTTP run/事件/请求去重仅在进程内存中，未接入业务 repository、重启恢复或 token streaming；同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
+  - 真实模型接入前需补齐 assistant tool_calls/tool 消息配对和工具参数 schema 校验，见 tech-debt-tracker.md；Starlette TestClient 的 httpx 弃用提示也已记录。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析和前端原文页未实现。
   - M4B 当前已完成后端声明式包、事件用例和 SQLite 最小持久化；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
   - fixture demo 不是浏览器录屏或真实模型演示；M5 仍需真实模型 smoke 与最终演示交接材料。
 - 必要的复验方式：
-  - python scripts/run-python-tests.py
-  - python scripts/check-python-boundaries.py
+  - uv sync --locked --group dev
+  - uv run --locked python scripts/run-python-tests.py
+  - uv run --locked python scripts/check-python-boundaries.py
   - npm.cmd run eval:offline
   - npm.cmd run demo:fixture
   - npm.cmd run ci
   - 后续阶段按本计划逐项补充 E2E 与真实模型记录。
+
+## HTTP/SSE 实施切片（已完成）
+
+- 范围：FastAPI app factory、后台 run、查询/取消、实时生命周期 SSE、fixture 启动入口、锁定依赖与 CI 安装。复用官方 StreamingResponse/lifespan/TestClient，不添加任务队列平台。
+- 验收：阻塞模型下 POST 及时返回 202；重复提交不重跑；同 session 409、全局 429；取消终态不被晚到结果覆盖，调用退出前不释放名额；真实 TCP SSE 在模型结束前收到快照、started 和 heartbeat；关机协作停止。
+- 证据：tests/test_http_runs.py 覆盖上述边界、唯一终态、断线不取消/重连只取快照、Host/Origin 和活跃 SSE 下的关闭；独立 Uvicorn 进程 smoke 验证本地 factory。README 给出锁定依赖安装与提交/查询/SSE 命令。
+- 限制：本切片不宣称 token streaming、run 重启恢复、完整业务 HTTP/React 或真实模型能力；这些仍属于总计划待办。

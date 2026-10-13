@@ -3,7 +3,7 @@
 const projectRoots = new Set([
   'AGENTS.md', 'CLAUDE.md', 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'SECURITY.md',
   'CODEOWNERS', '.gitignore', '.gitattributes', '.editorconfig', '.markdownlint.json',
-  'package.json', 'pyproject.toml', 'docs', 'scripts', 'src', 'tests', '.github',
+  'package.json', 'pyproject.toml', 'uv.lock', 'docs', 'scripts', 'src', 'tests', '.github',
 ]);
 
 // Repository maintenance material is not part of a new project's starting state.

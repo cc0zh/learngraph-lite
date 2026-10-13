@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Condition
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -11,6 +14,12 @@ from learngraph_lite.agent_core import AgentRunner, Budget, TextMessage
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "budget_exceeded"}
+
+
+class RunAdmissionError(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -53,60 +62,146 @@ class AgentLoop:
     ):
         self._runner = runner
         self._direct_handlers = direct_handlers or {}
-        self._records_by_key: dict[str, RunRecord] = {}
+        self._records_by_key: dict[tuple[str, str], RunRecord] = {}
+        self._requests_by_key: dict[tuple[str, str], RunRequest] = {}
         self._records_by_id: dict[str, RunRecord] = {}
         self._events_by_run: dict[str, list[RunEvent]] = {}
+        self._active: dict[str, Budget] = {}
+        self._condition = Condition()
+        self._executor: ThreadPoolExecutor | None = None
+        self._closed = False
 
     def run(self, request: RunRequest, budget: Budget | None = None) -> RunRecord:
-        existing = self._records_by_key.get(request.idempotency_key)
-        if existing is not None:
-            return existing
+        with self._condition:
+            record, created = self._admit(request, budget or Budget())
+        if created:
+            self._execute(record, request)
+        return record
 
-        record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="running")
-        self._records_by_key[request.idempotency_key] = record
+    def submit(self, request: RunRequest, budget: Budget | None = None) -> RunRecord:
+        """Admit once and return without waiting for model/tool execution."""
+        with self._condition:
+            record, created = self._admit(request, budget or Budget())
+            if created:
+                if self._executor is None:
+                    self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent-run")
+                self._executor.submit(self._execute, record, request)
+            return _copy_record(record)
+
+    def _admit(self, request: RunRequest, budget: Budget) -> tuple[RunRecord, bool]:
+        if self._closed:
+            raise RunAdmissionError("shutting_down", "application is shutting down")
+        key = (request.session_id, request.idempotency_key)
+        existing = self._records_by_key.get(key)
+        if existing is not None:
+            if self._requests_by_key[key] != request:
+                raise RunAdmissionError("idempotency_conflict", "request ID was already used for different input")
+            return existing, False
+        if any(self._records_by_id[run_id].session_id == request.session_id for run_id in self._active):
+            raise RunAdmissionError("session_busy", "this session already has an active run")
+        if len(self._active) >= 2:
+            raise RunAdmissionError("capacity_exceeded", "at most two runs can execute at once")
+        record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued")
+        self._records_by_key[key] = record
+        self._requests_by_key[key] = request
         self._records_by_id[record.run_id] = record
         self._events_by_run[record.run_id] = []
-        self._emit(record, "run.started", {"status": record.status, "mode": request.mode})
+        self._active[record.run_id] = budget
+        return record, True
+
+    def _execute(self, record: RunRecord, request: RunRequest) -> None:
+        with self._condition:
+            budget = self._active[record.run_id]
+            if record.status in TERMINAL_STATUSES:
+                self._release(record)
+                return
+            record.status = "running"
+            record.updated_at = datetime.now(UTC)
+            self._emit(record, "run.started", {"status": record.status, "mode": request.mode})
         try:
             if request.mode in self._direct_handlers:
-                record.final_text = self._direct_handlers[request.mode](request)
-                self._finish(record, "completed", summary="direct generation completed")
-                return record
+                text = self._direct_handlers[request.mode](request)
+                with self._condition:
+                    if record.status not in TERMINAL_STATUSES:
+                        record.final_text = text
+                        self._finish(record, "completed", summary="direct generation completed")
+                return
 
             result = self._runner.run(
                 (TextMessage(role="user", content=request.user_text),),
-                budget=budget or Budget(),
+                budget=budget,
             )
-            record.final_text = result.final_text
-            record.error = "; ".join(result.errors)
-            record.usage = dict(result.usage)
-            status = "budget_exceeded" if _is_budget_failure(result.status, result.errors) else result.status
-            self._finish(record, status, summary=_summary_for(status, record))
-            return record
+            with self._condition:
+                if record.status not in TERMINAL_STATUSES:
+                    record.final_text = result.final_text
+                    record.error = "; ".join(result.errors)
+                    record.usage = dict(result.usage)
+                    status = "budget_exceeded" if _is_budget_failure(result.status, result.errors) else result.status
+                    self._finish(record, status, summary=_summary_for(status, record))
         except Exception as exc:
-            record.error = str(exc)
-            self._finish(record, "failed", summary="run failed before producing a result")
-            return record
+            with self._condition:
+                if record.status not in TERMINAL_STATUSES:
+                    record.error = str(exc)
+                    self._finish(record, "failed", summary="run failed before producing a result")
+        finally:
+            with self._condition:
+                self._release(record)
+
+    def _release(self, record: RunRecord) -> None:
+        # Cancellation ends public state, but cannot preempt a blocking provider call.
+        self._active.pop(record.run_id, None)
+        self._condition.notify_all()
 
     def get_run(self, run_id: str) -> RunRecord:
-        try:
-            return self._records_by_id[run_id]
-        except KeyError as exc:
-            raise KeyError(f"unknown run: {run_id}") from exc
+        with self._condition:
+            return _copy_record(self._record(run_id))
 
-    def events(self, run_id: str, *, after_seq: int = 0) -> tuple[RunEvent, ...]:
+    def _record(self, run_id: str) -> RunRecord:
         if run_id not in self._records_by_id:
             raise KeyError(f"unknown run: {run_id}")
-        return tuple(event for event in self._events_by_run[run_id] if event.seq > after_seq)
+        return self._records_by_id[run_id]
+
+    def events(self, run_id: str, *, after_seq: int = 0) -> tuple[RunEvent, ...]:
+        with self._condition:
+            self._record(run_id)
+            return tuple(event for event in self._events_by_run[run_id] if event.seq > after_seq)
+
+    def snapshot(self, run_id: str) -> tuple[RunRecord, int]:
+        """Capture state and event cursor atomically for a new SSE subscriber."""
+        with self._condition:
+            return _copy_record(self._record(run_id)), len(self._events_by_run[run_id])
+
+    def wait_events(self, run_id: str, after_seq: int, timeout: float) -> tuple[RunEvent, ...]:
+        with self._condition:
+            self._record(run_id)
+            self._condition.wait_for(
+                lambda: len(self._events_by_run[run_id]) > after_seq
+                or self._records_by_id[run_id].status in TERMINAL_STATUSES,
+                timeout=timeout,
+            )
+            return self.events(run_id, after_seq=after_seq)
 
     def cancel(self, run_id: str) -> RunRecord:
-        record = self.get_run(run_id)
-        if record.status in TERMINAL_STATUSES:
-            return record
-        self._finish(record, "cancelled", summary="run was cancelled before completion")
-        return record
+        with self._condition:
+            record = self._record(run_id)
+            if record.status not in TERMINAL_STATUSES:
+                self._active[run_id].cancelled = True
+                self._finish(record, "cancelled", summary="run was cancelled before completion")
+            return _copy_record(record)
+
+    def close(self) -> None:
+        """Stop admission, cooperatively cancel and join the bounded worker pool."""
+        with self._condition:
+            self._closed = True
+            for run_id in tuple(self._active):
+                self.cancel(run_id)
+            executor = self._executor
+        if executor is not None:
+            executor.shutdown(wait=True)
 
     def _finish(self, record: RunRecord, status: str, *, summary: str) -> None:
+        if record.status in TERMINAL_STATUSES:
+            return
         record.status = status
         record.summary = summary
         record.updated_at = datetime.now(UTC)
@@ -122,6 +217,11 @@ class AgentLoop:
     def _emit(self, record: RunRecord, event_type: str, payload: dict[str, Any]) -> None:
         events = self._events_by_run[record.run_id]
         events.append(RunEvent(run_id=record.run_id, seq=len(events) + 1, type=event_type, payload=payload))
+        self._condition.notify_all()
+
+
+def _copy_record(record: RunRecord) -> RunRecord:
+    return replace(record, usage=dict(record.usage))
 
 
 def _is_budget_failure(status: str, errors: tuple[str, ...]) -> bool:

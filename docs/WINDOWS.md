@@ -11,7 +11,7 @@ git --version
 tar --version
 ```
 
-这些是仓库工具的运行要求，不需要 Bash、rsync、Perl 或 npm 依赖安装。业务应用的运行方式由项目自行补充。
+这些是仓库工具的运行要求，不需要 Bash、rsync、Perl 或 npm 依赖安装。LearnGraph 后端检查还需要 Python 3.13+ 和 uv；先运行 `uv sync --locked --group dev` 安装锁定依赖。通过 `npm.cmd run dev:api` 启动本地 fixture API，查询/取消/SSE 示例见根 README。
 
 从仓库根目录执行：
 

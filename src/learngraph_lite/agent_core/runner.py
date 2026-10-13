@@ -39,6 +39,7 @@ class AgentRunner:
                 budget.take_model_call()
                 response = self._model.complete(tuple(transcript), self._tools.model_tools())
                 _merge_usage(usage, response)
+                budget.check_step(step)
                 if response.content:
                     transcript.append(TextMessage(role="assistant", content=response.content))
 

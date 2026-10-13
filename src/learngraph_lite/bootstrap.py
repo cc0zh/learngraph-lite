@@ -47,5 +47,12 @@ def smoke() -> str:
     return record.final_text
 
 
+def create_fixture_app():
+    """Explicit fixture-only HTTP factory for local startup, never a real-model fallback."""
+    from learngraph_lite.presentation.http import create_app
+
+    return create_app(build_fixture_loop(), model_mode="fixture")
+
+
 if __name__ == "__main__":
     print(smoke())

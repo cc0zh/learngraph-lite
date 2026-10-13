@@ -13,7 +13,7 @@ def test_loop_deduplicates_by_idempotency_key():
     loop = AgentLoop(AgentRunner(AnswerModel(), ToolRegistry()))
     request = RunRequest(session_id="s1", user_text="hello", idempotency_key="k1")
     first = loop.run(request)
-    second = loop.run(RunRequest(session_id="s1", user_text="changed", idempotency_key="k1"))
+    second = loop.run(request)
     assert first is second
     assert second.final_text == "answer: hello"
 

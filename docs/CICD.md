@@ -5,6 +5,7 @@
 ## 默认包含的内容
 
 - `ci.yml`：Windows、Ubuntu、macOS 矩阵，运行文档/仓库/Action 检查、Node.js 语法检查、回归测试和打包；Markdown lint 在 Ubuntu 执行。
+- Python 门禁使用固定 commit 的 setup-python 安装 Python 3.13，再安装 uv 0.8.13 并执行 `uv sync --locked --group dev`。`scripts/ci.cjs` 通过 `uv run --locked python` 运行分层检查和包含真实 TCP SSE 的确定性测试。
 - `supply-chain-security.yml`：在 PR 上做依赖变更检查，并在 PR、定时任务和手动触发时运行 OSV 扫描。
 - `release.yml`：手动触发的 release 流水线，用来打包仓库级制品、生成 provenance，并创建 GitHub Release。
 
@@ -35,6 +36,6 @@
 
 也就是说，即使项目还没进入真实部署阶段，这个模板也已经把“可追溯的制品封装”这一步准备好了。
 
-本地执行 `npm run release-package`（PowerShell 用 `npm.cmd`）仅生成前两项；SBOM、attestation 和 GitHub Release 由 Ubuntu 发布任务生成。发布前先运行 `npm run ci`。本地检查和打包需要 Node.js 22+、Git、tar，无 npm 依赖安装步骤。
+本地执行 `npm run release-package`（PowerShell 用 `npm.cmd`）仅生成前两项；SBOM、attestation 和 GitHub Release 由 Ubuntu 发布任务生成。发布前先运行 `npm run ci`。本地检查和打包需要 Node.js 22+、Python 3.13+、uv、Git、tar，无 npm 依赖安装步骤。先运行 `uv sync --locked --group dev` 安装 Python 依赖；制品包含 pyproject.toml 和 uv.lock，解包后使用同样命令准备环境。
 
 制品与初始化使用相同的精简规则，包含点文件、CODEOWNERS、文档骨架和测试；不包含模板宣传素材、旧记录、演示页或 nono 扩展。解包后可运行 `node scripts/ci.cjs`。打包仅更新约定产物，不清空 `dist`。当前目录不是 Git 仓库时以 `unknown` 记录 SHA。

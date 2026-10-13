@@ -36,7 +36,8 @@ def public_run_event(event: RunEvent) -> dict[str, Any]:
         "run_id": event.run_id,
         "seq": event.seq,
         "type": event.type,
-        "created_at": event.created_at.isoformat(),
+        "schema_version": 1,
+        "timestamp": event.created_at.isoformat(),
         "payload": payload,
     }
 
@@ -45,3 +46,13 @@ def encode_sse(event: RunEvent) -> str:
     public = public_run_event(event)
     data = json.dumps(public, ensure_ascii=False, sort_keys=True)
     return f"id: {event.seq}\nevent: {event.type}\ndata: {data}\n\n"
+
+
+def encode_snapshot(record: RunRecord, seq: int) -> str:
+    event = RunEvent(
+        run_id=record.run_id,
+        seq=seq,
+        type="run.snapshot",
+        payload=public_run(record),
+    )
+    return encode_sse(event)

@@ -13,8 +13,8 @@ main(() => {
       run(process.execPath, ['--check', file]);
     }
   }
-  run('python', ['scripts/check-python-boundaries.py'], { stdio: 'inherit' });
-  run('python', ['scripts/run-python-tests.py'], { stdio: 'inherit' });
+  run('uv', ['run', '--locked', 'python', 'scripts/check-python-boundaries.py'], { stdio: 'inherit' });
+  run('uv', ['run', '--locked', 'python', 'scripts/run-python-tests.py'], { stdio: 'inherit' });
   run(process.execPath, ['--test', 'tests/tooling.test.cjs'], { stdio: 'inherit' });
   console.log('基础 CI 检查通过');
 });
