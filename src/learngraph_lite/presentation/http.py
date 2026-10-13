@@ -8,12 +8,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Callable, Literal
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunRequest, TERMINAL_STATUSES
+from learngraph_lite.application.learning_agent import LearningContext, LearningContextError
 from learngraph_lite.presentation.sse import encode_snapshot, encode_sse, public_run
 
 
@@ -25,6 +26,8 @@ class SubmitRun(BaseModel):
 
     request_id: Identifier
     user_text: str = Field(strict=True, min_length=1, max_length=16000)
+    goal_id: Identifier | None = None
+    node_id: Identifier | None = None
 
     @field_validator("user_text")
     @classmethod
@@ -71,6 +74,7 @@ def create_app(
     model_configured: bool = False,
     heartbeat_seconds: float = 15.0,
     on_close: Callable[[], None] | None = None,
+    learning_context: LearningContext | None = None,
 ) -> FastAPI:
     """Create a process-local API, with cooperative shutdown and snapshot-first SSE."""
     if not math.isfinite(heartbeat_seconds) or heartbeat_seconds <= 0:
@@ -111,7 +115,8 @@ def create_app(
 
     @app.exception_handler(RunAdmissionError)
     async def admission_error(request: Request, exc: RunAdmissionError):
-        status = {"session_busy": 409, "capacity_exceeded": 429, "idempotency_conflict": 409, "shutting_down": 503}
+        status = {"session_busy": 409, "capacity_exceeded": 429, "idempotency_conflict": 409,
+                  "shutting_down": 503, "invalid_scope": 422, "session_scope_conflict": 409}
         return _error(
             status[exc.code], exc.code, str(exc),
             retryable=exc.code in {"session_busy", "capacity_exceeded", "shutting_down"},
@@ -120,6 +125,21 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError):
         return _error(422, "invalid_request", "Invalid request parameters.")
+
+    @app.exception_handler(LearningContextError)
+    async def learning_error(request: Request, exc: LearningContextError):
+        status = 404 if exc.code in {"goal_not_found", "node_not_found"} else 409
+        return _error(status, exc.code, str(exc))
+
+    if learning_context is not None:
+        @app.get("/api/goals/{goal_id}/nodes/{node_id}/context")
+        def node_context(goal_id: Identifier, node_id: Identifier):
+            return learning_context.context(goal_id, node_id)
+
+        @app.get("/api/goals/{goal_id}/nodes/{node_id}/next-action")
+        def next_action(goal_id: Identifier, node_id: Identifier,
+                        available_minutes: Annotated[int | None, Query(gt=0)] = None):
+            return learning_context.next_action(goal_id, node_id, available_minutes)
 
     @app.get("/api/health")
     async def health():
@@ -135,6 +155,7 @@ def create_app(
     async def submit_run(session_id: Identifier, body: SubmitRun):
         record = loop.submit(RunRequest(
             session_id=session_id, user_text=body.user_text, idempotency_key=body.request_id,
+            goal_id=body.goal_id, node_id=body.node_id,
         ))
         return public_run(record)
 

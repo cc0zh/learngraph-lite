@@ -16,6 +16,7 @@ temp/
 .env
 .env.local
 .env.*.local
+.local/
 
 # Dependency caches and common build output
 node_modules/

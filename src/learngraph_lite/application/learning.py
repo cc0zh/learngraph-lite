@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
 from learngraph_lite.application.agent import AgentLoop, RunRequest
@@ -34,6 +34,10 @@ class LearningRepository(Protocol):
     def get(self, goal_id: str) -> LearningState: ...
 
 
+class StaleLearningGraphError(ValueError):
+    """Learning progress belongs to a different planning snapshot."""
+
+
 @dataclass
 class InMemoryLearningRepository:
     _states: dict[str, LearningState] = field(default_factory=dict)
@@ -49,7 +53,7 @@ class InMemoryLearningRepository:
 
 
 class LearningService:
-    def __init__(self, repository: LearningRepository, loop: AgentLoop):
+    def __init__(self, repository: LearningRepository, loop: AgentLoop | None = None):
         self._repository = repository
         self._loop = loop
 
@@ -57,6 +61,8 @@ class LearningService:
         self._repository.save(graph.goal_id, LearningState(graph=graph))
 
     def learn_node(self, goal_id: str, node_id: str, user_text: str, request_id: str) -> str:
+        if self._loop is None:
+            raise RuntimeError("node learning requires an AgentLoop")
         state = self._repository.get(goal_id)
         _require_node(state.graph, node_id)
         existing = state.final_text_by_key.get(request_id)
@@ -67,6 +73,8 @@ class LearningService:
                 session_id=f"{goal_id}:{node_id}",
                 user_text=user_text,
                 idempotency_key=request_id,
+                goal_id=goal_id,
+                node_id=node_id,
             )
         )
         state.run_ids_by_key.setdefault(request_id, record.run_id)
@@ -74,6 +82,28 @@ class LearningService:
             state.final_text_by_key.setdefault(request_id, record.final_text)
         self._repository.save(goal_id, state)
         return record.final_text
+
+    def context(self, goal_id: str, node_id: str, *, expected_graph: GraphSnapshot | None = None) -> dict:
+        state = self._repository.get(goal_id)
+        _check_graph(state, expected_graph)
+        _require_node(state.graph, node_id)
+        nodes = {node.id: node for node in state.graph.nodes}
+
+        def describe(selected_id: str) -> dict:
+            mastery, samples, accuracy = _mastery(state, selected_id)
+            return {
+                **asdict(nodes[selected_id]), "mastery": mastery.value,
+                "sample_count": samples, "accuracy": accuracy,
+            }
+
+        return {
+            "goal_id": goal_id,
+            "graph_revision": state.graph.revision,
+            "content_revision": state.graph.content_revision,
+            "graph_status": state.graph.status.value,
+            "node": describe(node_id),
+            "prerequisites": [describe(edge.source) for edge in state.graph.edges if edge.target == node_id],
+        }
 
     def create_fixture_exercise(self, goal_id: str, node_id: str, exercise_id: str, prompt: str) -> ExercisePublic:
         state = self._repository.get(goal_id)
@@ -116,16 +146,13 @@ class LearningService:
 
     def mastery(self, goal_id: str, node_id: str) -> tuple[MasteryState, int, float]:
         state = self._repository.get(goal_id)
-        counted = tuple(
-            AttemptResult(attempt.exercise_id, attempt.is_correct)
-            for attempt in state.attempts
-            if attempt.node_id == node_id and attempt.counted
-        )
-        return score_mastery(counted)
+        return _mastery(state, node_id)
 
-    def next_action(self, goal_id: str, available_minutes: int | None = None) -> NextAction:
+    def next_action(self, goal_id: str, available_minutes: int | None = None,
+                    *, expected_graph: GraphSnapshot | None = None) -> NextAction:
         state = self._repository.get(goal_id)
-        mastery = {node.id: self.mastery(goal_id, node.id)[0] for node in state.graph.nodes}
+        _check_graph(state, expected_graph)
+        mastery = {node.id: _mastery(state, node.id)[0] for node in state.graph.nodes}
         recent_wrong = tuple(attempt.node_id for attempt in state.attempts if attempt.counted and not attempt.is_correct)[-5:]
         return recommend_next_action(
             graph=state.graph,
@@ -138,3 +165,17 @@ class LearningService:
 def _require_node(graph: GraphSnapshot, node_id: str) -> None:
     if node_id not in {node.id for node in graph.nodes}:
         raise ValueError(f"unknown node: {node_id}")
+
+
+def _check_graph(state: LearningState, expected_graph: GraphSnapshot | None) -> None:
+    if expected_graph is not None and state.graph != expected_graph:
+        raise StaleLearningGraphError("learning graph differs from the published planning snapshot")
+
+
+def _mastery(state: LearningState, node_id: str) -> tuple[MasteryState, int, float]:
+    counted = tuple(
+        AttemptResult(attempt.exercise_id, attempt.is_correct)
+        for attempt in state.attempts
+        if attempt.node_id == node_id and attempt.counted
+    )
+    return score_mastery(counted)

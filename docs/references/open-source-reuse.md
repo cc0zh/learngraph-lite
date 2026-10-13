@@ -13,3 +13,5 @@
 | [openai/openai-python](https://github.com/openai/openai-python/tree/v1.109.1) | Chat Completions 模型协议与原生 tool calling | 已采用官方 SDK，不摘取源码 | 1.109.1，Apache-2.0；2026-10-13 核验安装包 LICENSE、metadata、构造器和 completions.create 参数 | SDK metadata 要求 `httpx>=0.23,<1`、`pydantic>=1.9,<3`，实际锁定安装与现有 HTTPX 0.28.1/Pydantic 2.14.1 共存；为稳定现有 HTTP 栈采用此固定版本，不宣称它是最新版。关闭 SDK 重试，设置 timeout/max_tokens，显式 close；测试使用真实 SDK + HTTPX MockTransport，仅证明离线协议行为。 |
 
 后续继续补充 React/TypeScript、PDF parser、图布局和 UI 基础库。当前 SQLite/FTS5 使用 Python 标准库适配；锁文件固定 HTTP 切片的依赖树，本记录不代表对所有传递依赖完成独立源码审计。
+
+2026-10-13 补充核验 nanobot 同一固定 commit 的 [`nanobot/agent/context.py`](https://github.com/HKUDS/nanobot/blob/23941355a8932609d7fc7ba2820f162d1ea7bea5/nanobot/agent/context.py)：`TranscriptInput` 保存 history/current_message/runtime_context_blocks，`ContextBuilder.build_transcript()` 在进入 Runner 前装配系统指令、历史和当前输入，并保留新一轮边界。本项目仅参考上下文装配分工，以 `LearningContext.prepare()` 组装学习业务数据与当前输入；不复制源码，不引入 memory、skills、workspace、媒体或历史会话模块。已实现与测试的 SQLite fixture 回合不构成真实供应商能力证据。

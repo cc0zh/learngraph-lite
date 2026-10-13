@@ -83,7 +83,7 @@
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
   - React/P1 与完整业务 HTTP 尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
-  - HTTP run/事件/请求去重仅在进程内存中，未接入业务 repository、重启恢复或 token streaming；同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
+  - HTTP run/事件/请求去重与 session 作用域仅在进程内存中，未实现重启恢复或 token streaming；real factory 已接 planning/learning 只读用例，完整业务 HTTP 仍待后续。同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
   - assistant tool_calls/tool 消息配对和 Pydantic 工具参数校验已完成；真实供应商兼容性仍待 smoke 验证，见 tech-debt-tracker.md；Starlette TestClient 的 httpx 弃用提示也已记录。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析和前端原文页未实现。
   - M4B 当前已完成后端声明式包、事件用例和 SQLite 最小持久化；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
@@ -117,3 +117,17 @@
 - 验证：`uv sync --locked --group dev` 成功；核验安装 SDK 的 metadata、LICENSE 与所用参数。`npm.cmd run ci` 通过文档/仓库/Action 检查、Python import 边界、61 个 Python 测试和 19 个 Node 测试；`npm.cmd run eval:offline` 通过 20/20，`npm.cmd run smoke:fixture` 成功。
 - 协议证据：官方 SDK + HTTPX MockTransport 验证多工具消息配对、错误参数修复、usage 汇总、实际 HTTP 请求参数、超时/连接/HTTP 错误脱敏和零重试；real factory 测试验证缺配置失败、有限超时配置和 lifespan 客户端清理。
 - 剩余范围：真实供应商 smoke 未执行；当前 real 入口仅注册 echo，使用 `max_tokens` 的 Chat Completions，未接业务工具、Responses API 或 token streaming。React、完整业务 HTTP/SQLite 与 M5 最终交接继续按总计划推进。
+
+## 节点学习上下文与只读业务工具切片（已完成）
+
+- 原因：此前节点入口只发送用户文本，真实 API 只装配 echo；需让 Agent 读取已确认目标、已发布节点、前置依赖和持久化练习表现，并复用服务端推荐规则。
+- 范围：应用层上下文装配与 `get_learning_context` / `get_next_action` 工具；Loop 按请求准备独立 Runner；真实 API 使用已有 SQLite repository；HTTP 节点上下文/推荐与 Agent 工具复用同一用例。演示脚本提供明确标记的离线闭环和可选真实调用。
+- 不在本切片内：生成/资料工具、会话历史持久化、完整规划 HTTP、React 与 token streaming。后续按总计划继续实施，不能据此宣称 P0/P1 已完成。
+- 参考：2026-10-13 已通过 GitHub raw 读取 nanobot 固定 commit `23941355a8932609d7fc7ba2820f162d1ea7bea5` 的 `nanobot/agent/context.py`，参考系统指令/业务数据/当前输入在进入 Runner 前装配的分工；不摘取其记忆、skills、媒体或 workspace 能力。
+- [x] 实现每次请求独立的上下文/工具集合，绑定目标/节点，校验发布状态、完整图谱快照和 run 内版本；工具 schema 不接受作用域参数，不注册业务写入工具。
+- [x] real factory 使用 SQLite planning/learning repository；HTTP context/next-action 与工具复用 `LearningContext`。新增 `demo:learning-agent`，默认临时 SQLite，指定新路径可保留演示数据，拒绝覆盖已有文件；可选 --real 不进入默认验证。
+- [x] 以 5 个行为测试聚合持久数据工具回合/参数修复、barrier 并发隔离与 session 绑定、未发布/缺失/过期拒绝、real HTTP factory 共用用例与错误映射、demo 防覆盖；原测试/demo/eval 调用方迁移到场景装配，未放宽断言。
+- [x] 同步 README、架构、来源、tech debt、history/learning，完成审查。本切片独立提交，总计划仍 active。
+- 验证：`npm.cmd run ci` 通过文档/仓库/Action 检查、Python import 边界、66 个 Python 测试与 19 个 Node 测试；`npm.cmd run eval:offline` 通过 20/20；`smoke:fixture`、`demo:fixture` 与 `demo:learning-agent` 全通过。既有 shutdown 测试的 graceful timeout/CancelledError 与 TestClient 弃用提示仍是已知输出；退出码为 0。
+- 测试收敛：只新增 5 个覆盖不同边界的行为测试，沿用原有 HTTP 生命周期、SDK 序列化与领域算法验证；未为相同规则再建镜像测试。旧离线评测与 demo 的生成文件无内容变化。
+- 限制：真实供应商 smoke/业务 demo 未执行。数据在分别读取的 SQLite repository 中，没有跨仓库事务或图谱迁移协议；`start_goal` 会重置学习状态，只用于首次初始化或隔离 fixture，不能作为只读上下文的自动修复。历史对话、资料/出题工具、完整规划/练习 HTTP、React 与 M5 最终交接仍待后续切片。

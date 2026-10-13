@@ -2,7 +2,7 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE，以及 OpenAI-compatible 原生工具调用适配器。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
+当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及读取节点上下文与下一步推荐的业务工具。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
 
 ## 开发准备
 
@@ -67,9 +67,45 @@ npm.cmd run dev:api:real
 
 macOS/Linux 对应设置 `export MODEL_API_KEY='...'` 和 `export MODEL_NAME='...'`，然后运行 `npm run dev:api:real`。`OPENAI_API_KEY` 可作为 Key 备用变量；`MODEL_BASE_URL` 未设置时使用 SDK 默认 OpenAI endpoint。`MODEL_TIMEOUT_SECONDS` 默认 30 秒，为 SDK 网络操作超时，并非整个 run 的硬截止时间；`MODEL_MAX_OUTPUT_TOKENS` 默认 1024，经 `max_tokens` 传递。仅支持接受该参数的 Chat Completions 模型；不宣称所有兼容 endpoint 或模型均可用。
 
-real API 使用相同的提交/查询/SSE 路径，`/api/model/status` 返回 `mode: real`、`configured: true`，只表示配置已装配，不表示供应商连通或认证成功。当前只注册用于协议验证的 `echo` 工具，尚未接入学习业务工具。SDK 隐式重试关闭，应用关闭会先等待工作线程退出再关闭客户端；fixture 入口保持独立。
+real API 使用相同的提交/查询/SSE 路径，`/api/model/status` 返回 `mode: real`、`configured: true`，只表示配置已装配，不表示供应商连通或认证成功。不带目标/节点的请求使用普通回答与协议验证 `echo`；带作用域的请求装配节点上下文，并只注册 `get_learning_context` 和 `get_next_action`。SDK 隐式重试关闭，应用关闭会先等待工作线程退出再关闭客户端；fixture API 仍只用于协议演示。
 
 配置完成后可手动运行 `npm.cmd run smoke:real`（macOS/Linux 使用 `npm run smoke:real`）。它会产生真实 API 请求和费用，依次验证普通回答、原生 echo 调用及工具结果后的回答；不进入默认 CI。本次尚未执行真实供应商 smoke，离线 SDK 协议测试不能替代这项证据。
+
+## 复现节点学习 Agent
+
+无需 Key 的 SQLite 演示：
+
+```powershell
+npm.cmd run demo:learning-agent
+```
+
+脚本创建临时数据库，确认 fixture 目标、发布 8 节点图谱并记录 3 次示例作答，再通过原生工具协议读取“资料加载与清洗”的上下文与十分钟下一步推荐。输出标记 `mode: fixture` 和 `data: fixture-seeded SQLite`。这验证应用调用链，不代表真实模型能力。
+
+要把演示数据留给 real API，先使用一个尚不存在的数据库文件：
+
+```powershell
+npm.cmd run demo:learning-agent -- --database .local/learning-demo.sqlite3
+$env:LEARNGRAPH_DATABASE_PATH = '.local/learning-demo.sqlite3'
+npm.cmd run dev:api:real
+```
+
+脚本拒绝覆盖已有文件。real API 默认数据库为 `.local/learngraph.sqlite3`；启动仅初始化表，不创建目标或重置成绩。当前尚无完整规划 HTTP，可用上述脚本初始化独立演示数据。
+
+服务启动后读取上下文并提交节点请求：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/goals/demo-goal/nodes/document-loading/context
+Invoke-RestMethod 'http://127.0.0.1:8000/api/goals/demo-goal/nodes/document-loading/next-action?available_minutes=10'
+$body = @{request_id='node-1'; user_text='解释当前节点，并给我十分钟下一步建议'; goal_id='demo-goal'; node_id='document-loading'} | ConvertTo-Json
+$run = Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
+  -Uri http://127.0.0.1:8000/api/sessions/node-demo/runs
+curl.exe -N "http://127.0.0.1:8000/api/runs/$($run.run_id)/events"
+```
+
+`goal_id` / `node_id` 必须一起提供，同 session 绑定同一个目标/节点；换节点需新 session。上下文包含已确认目标、发布版本、当前节点、直接前置依赖与练习表现，不包含私有答案。推荐针对整个目标，使用已有服务端规则；`available_minutes` 可省略，提供时必须为正整数。节点不存在返回 404，未发布/未初始化/版本过期的只读请求返回 409；run 内装配失败记录为 `failed`。图谱变化不会自动清空或迁移学习成绩，需后续显式同步用例。
+
+每轮独立装配工具与上下文，工具参数不接受目标/节点改写。目前不读取历史对话，也没有生成练习、检索资料或写入业务状态的 Agent 工具。可手动使用 `npm.cmd run demo:learning-agent -- --real` 调配置好的供应商，可能产生费用，业务数据仍是 fixture；本次未执行。
 
 ## 常用命令
 
@@ -83,6 +119,7 @@ real API 使用相同的提交/查询/SSE 路径，`/api/model/status` 返回 `m
 - npm.cmd run smoke:real
 - npm.cmd run eval:offline
 - npm.cmd run demo:fixture
+- npm.cmd run demo:learning-agent
 - npm.cmd run release-package
 
 ## 当前架构
@@ -90,7 +127,7 @@ real API 使用相同的提交/查询/SSE 路径，`/api/model/status` 返回 `m
 - src/learngraph_lite/agent_core/：独立 Agent 内核，包含模型协议、工具注册表、Runner 和预算控制。
 - src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入、运行摘要、公共事件和终态。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。
-- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码和 FastAPI 查询/后台提交/取消/事件路由；HTTP 只调用应用层 AgentLoop。
+- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run 路由和节点只读接口；HTTP 只调用应用层 AgentLoop 与 LearningContext 用例。
 - src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson 的最小 SQLite repository、SQLite FTS5 检索与官方 OpenAI SDK Chat Completions gateway；完整业务持久化、真实 PDF 解析和前端原文页仍待接入。
 
 更多边界见 docs/ARCHITECTURE.md。

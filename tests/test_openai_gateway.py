@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from unittest.mock import patch
 
 import httpx
@@ -119,9 +120,10 @@ def test_real_factory_requires_configuration_and_closes_sdk_after_workers():
             raise AssertionError("unbounded timeout was accepted")
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=completion("hi"))))
     gateway = OpenAIChatGateway(api_key="test", model="test-model", http_client=client)
-    with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=gateway):
-        app = create_real_app()
-    with TestClient(app, base_url="http://localhost") as api:
-        assert api.get("/api/model/status").json() == {"mode": "real", "configured": True}
-        assert not client.is_closed
+    with tempfile.TemporaryDirectory() as directory:
+        with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=gateway):
+            app = create_real_app(database=os.path.join(directory, "test.sqlite3"))
+        with TestClient(app, base_url="http://localhost") as api:
+            assert api.get("/api/model/status").json() == {"mode": "real", "configured": True}
+            assert not client.is_closed
     assert client.is_closed

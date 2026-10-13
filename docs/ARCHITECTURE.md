@@ -40,14 +40,18 @@ M1 fixture smoke 使用 python -m learngraph_lite.bootstrap：bootstrap 装配 f
 
 `OpenAIChatGateway` 位于 infrastructure，使用官方 SDK 将 Chat Completions 映射到内核协议。`TextMessage` 保存 assistant 的完整 `tool_calls`，Runner 先追加 assistant 消息，再按原始 `tool_call_id` 追加对应结果；多个调用和错误参数也按相同顺序配对。`Tool.from_model` 由 Pydantic 生成 schema，执行时禁止额外字段和隐式类型转换，校验错误作为 tool 消息供模型修正；原有 dict schema 工具仍可使用。
 
-真实入口从环境变量显式创建 gateway、Runner、echo registry 和 AgentLoop，缺失配置时启动失败。SDK 关闭隐式重试、设置有限网络超时和 `max_tokens` 输出上限，超时/连接/HTTP 错误转换成不带供应商原始响应的失败信息；截断、空结果和不支持的调用拒绝视为成功。lifespan 先关闭 loop 并等待 worker 退出，再关闭 SDK 客户端。`scripts/run-model-smoke.py` 提供自选的普通回答与工具回合验证，当前只有官方 SDK + MockTransport 的离线协议证据。
+真实入口从环境变量显式创建 gateway、SQLite planning/learning repository 和 AgentLoop，缺失模型配置时启动失败。数据库默认 `.local/learngraph.sqlite3`，可由 `LEARNGRAPH_DATABASE_PATH` 指定；启动不创建演示目标或重置成绩。无作用域请求使用 echo registry；节点请求进入 `LearningContext.prepare()`，装配独立 Runner 与只读业务工具。SDK 关闭隐式重试、设置有限网络超时和 `max_tokens` 输出上限，超时/连接/HTTP 错误转换成不带供应商原始响应的失败信息；截断、空结果和不支持的调用拒绝视为成功。lifespan 先关闭 loop 并等待 worker 退出，再关闭 SDK 客户端。`scripts/run-model-smoke.py` 提供自选的普通回答与工具回合验证，当前供应商协议只有官方 SDK + MockTransport 的离线证据。
+
+`LearningContext` 复用 planning repository 与 `LearningService`，要求已确认目标、已发布图谱、合法节点以及与学习状态完全一致的图谱快照。初始消息按“版本化 system 指令 → JSON 业务数据 → 当前用户输入”装配；不加载历史对话。上下文仅投影当前节点、直接前置依赖和计分后的表现，不包含练习私有答案。`get_learning_context` / `get_next_action` 闭包绑定本次目标/节点，Pydantic schema 不暴露作用域参数；推荐调用领域规则，模型不能写成绩或重定义推荐算法。每次调用检查当前发布状态与版本，过期工具错误回注模型；不自动重置或迁移成绩。
+
+HTTP 的 context/next-action 路由复用相同用例，有限的同步 SQLite 读取由 FastAPI 同步路由执行，不占用 ASGI 事件循环。当前 planning/learning repository 仍分别读取，不提供跨仓库事务或并发发布同步协议；完整图谱变更与学习状态迁移需后续实现。`scripts/run-learning-agent-demo.py` 可复现 SQLite fixture 工具回合，拒绝覆盖已有文件；可选真实模型调用仍未执行。
 
 AgentLoop 会保存 run_id、session_id、终态、摘要、usage 和递增 seq 事件。presentation 层只把这些应用层记录投影成公共 run DTO 与 SSE frame，不读取 Runner transcript，不承担业务终态写入。
 
-HTTP 的 `submit()` 在锁内原子检查请求去重/输入冲突和 session/全局准入，再交给最多两个工作线程执行；不会等待模型返回。同步 `run()` 继续供离线用例使用。公开取消终态与实际调用退出分开：取消唤醒订阅者并设置预算标志，只有工作线程退出才释放名额。晚到结果不会覆盖已提交终态。
+HTTP 的 `submit()` 在锁内原子检查请求去重/输入冲突、session 作用域和 session/全局准入，再交给最多两个工作线程执行；不会等待模型返回。目标/节点必须成对，同 session 不能切换作用域；场景准备在工作线程中执行，失败沿用唯一终态路径。同步 `run()` 继续供离线用例使用。公开取消终态与实际调用退出分开：取消唤醒订阅者并设置预算标志，只有工作线程退出才释放名额。晚到结果不会覆盖已提交终态。
 
 SSE 原子捕获运行快照与事件序号，从该序号后等待新事件；状态和最后事件序号一起读取，避免终态与发流竞争导致漏发。等待通过异步线程桥接进行，不阻塞 ASGI 事件循环。每次重连重新读取当前快照，忽略历史游标，不提供重放。HTTP 边界限制本机 Host 与浏览器同源写请求。
 
 Uvicorn 先等待 HTTP/SSE 连接结束才触发 lifespan shutdown，本地启动命令设置 2 秒 graceful shutdown，避免活跃 SSE 无限挡住生命周期关闭。其他启动器也需设置有限的连接关闭等待时间。随后 lifespan 会停止准入、取消活动 run 并等待工作线程退出；同步阻塞模型/工具必须自行设置有限超时，Python 线程无法强行打断供应商调用。
 
-此 HTTP 切片的 run/事件/请求去重保存在进程内存中；不覆盖完整 session 业务、run 重启恢复或 token streaming。已有学习业务 repository 未在 HTTP factory 装配，真实入口的 echo 也仅用于协议验证。
+此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配 planning/learning 只读场景；练习生成、资料检索和写入业务工具、完整规划/练习 HTTP 与 React 继续按总计划实施。

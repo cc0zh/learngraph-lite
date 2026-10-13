@@ -19,6 +19,7 @@ from learngraph_lite.agent_core import AgentRunner, Budget, ModelResponse, TextM
 from learngraph_lite.application.agent import AgentLoop, RunRequest
 from learngraph_lite.application.documents import DocumentService, InMemoryDocumentRepository
 from learngraph_lite.application.learning import InMemoryLearningRepository, LearningService
+from learngraph_lite.bootstrap import build_learning_loop
 from learngraph_lite.application.lessons import InMemoryLessonRepository, LessonService
 from learngraph_lite.application.planning import InMemoryPlanningRepository, PlanningService, candidate_rag_graph
 from learngraph_lite.application.proposals import GraphProposalService, InMemoryProposalRepository
@@ -54,8 +55,8 @@ def _planning() -> PlanningService:
     return PlanningService(InMemoryPlanningRepository())
 
 
-def _published_graph():
-    planning = _planning()
+def _published_graph(repository=None):
+    planning = PlanningService(repository) if repository is not None else _planning()
     planning.create_goal("g1", "四周做出 RAG 应用", desired_outcome="demo", current_level="Python", time_budget_minutes=1200)
     planning.confirm_goal("g1")
     graph = candidate_rag_graph("g1")
@@ -64,9 +65,10 @@ def _published_graph():
 
 
 def _learning() -> LearningService:
-    loop = AgentLoop(AgentRunner(AnswerModel(), ToolRegistry()))
-    learning = LearningService(InMemoryLearningRepository(), loop)
-    learning.start_goal(_published_graph())
+    planning, repository = InMemoryPlanningRepository(), InMemoryLearningRepository()
+    graph = _published_graph(planning)
+    learning = LearningService(repository, build_learning_loop(AnswerModel(), planning, repository))
+    learning.start_goal(graph)
     return learning
 
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from learngraph_lite.agent_core import AgentRunner, ModelResponse, TextMessage, ToolRegistry
-from learngraph_lite.application.agent import AgentLoop
+from learngraph_lite.agent_core import ModelResponse, TextMessage
+from learngraph_lite.bootstrap import build_learning_loop
 from learngraph_lite.application.learning import LearningService
 from learngraph_lite.application.planning import InMemoryPlanningRepository, PlanningService, candidate_rag_graph
 from learngraph_lite.domain.learning import MasteryState
@@ -27,8 +27,8 @@ class FailingThenPassingModel:
         return ModelResponse(content=f"恢复后讲解：{messages[-1].content}")
 
 
-def published_graph():
-    planning = PlanningService(InMemoryPlanningRepository())
+def published_graph(repository=None):
+    planning = PlanningService(repository or InMemoryPlanningRepository())
     planning.create_goal("g1", "四周做出 RAG 应用", desired_outcome="demo", current_level="Python", time_budget_minutes=1200)
     planning.confirm_goal("g1")
     graph = candidate_rag_graph("g1")
@@ -37,13 +37,13 @@ def published_graph():
 
 
 def service(database: Path) -> LearningService:
-    loop = AgentLoop(AgentRunner(NodeTutorModel(), ToolRegistry()))
-    return LearningService(SQLiteLearningRepository(database), loop)
+    return service_with_model(database, NodeTutorModel())
 
 
 def service_with_model(database: Path, model) -> LearningService:
-    loop = AgentLoop(AgentRunner(model, ToolRegistry()))
-    return LearningService(SQLiteLearningRepository(database), loop)
+    planning, repository = InMemoryPlanningRepository(), SQLiteLearningRepository(database)
+    published_graph(planning)
+    return LearningService(repository, build_learning_loop(model, planning, repository))
 
 
 def test_sqlite_learning_repository_restores_mastery_and_next_action():

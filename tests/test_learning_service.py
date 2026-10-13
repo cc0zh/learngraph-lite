@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from learngraph_lite.agent_core import AgentRunner, ModelResponse, TextMessage, ToolRegistry
-from learngraph_lite.application.agent import AgentLoop
+from learngraph_lite.agent_core import ModelResponse, TextMessage
+from learngraph_lite.bootstrap import build_learning_loop
 from learngraph_lite.application.learning import InMemoryLearningRepository, LearningService
 from learngraph_lite.application.planning import InMemoryPlanningRepository, PlanningService, candidate_rag_graph
 from learngraph_lite.domain.learning import MasteryState
@@ -12,8 +12,8 @@ class NodeTutorModel:
         return ModelResponse(content=f"节点讲解：{messages[-1].content}")
 
 
-def published_graph():
-    planning = PlanningService(InMemoryPlanningRepository())
+def published_graph(repository=None):
+    planning = PlanningService(repository or InMemoryPlanningRepository())
     planning.create_goal("g1", "四周做出 RAG 应用", desired_outcome="demo", current_level="Python", time_budget_minutes=1200)
     planning.confirm_goal("g1")
     graph = candidate_rag_graph("g1")
@@ -22,9 +22,11 @@ def published_graph():
 
 
 def service() -> LearningService:
-    loop = AgentLoop(AgentRunner(NodeTutorModel(), ToolRegistry()))
-    learning = LearningService(InMemoryLearningRepository(), loop)
-    learning.start_goal(published_graph())
+    planning, repository = InMemoryPlanningRepository(), InMemoryLearningRepository()
+    graph = published_graph(planning)
+    loop = build_learning_loop(NodeTutorModel(), planning, repository)
+    learning = LearningService(repository, loop)
+    learning.start_goal(graph)
     return learning
 
 

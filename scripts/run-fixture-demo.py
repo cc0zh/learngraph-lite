@@ -11,8 +11,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from learngraph_lite.agent_core import AgentRunner, ModelResponse, TextMessage, ToolRegistry
-from learngraph_lite.application.agent import AgentLoop, RunRequest
+from learngraph_lite.agent_core import ModelResponse, TextMessage
+from learngraph_lite.bootstrap import build_learning_loop
 from learngraph_lite.application.documents import DocumentService, InMemoryDocumentRepository
 from learngraph_lite.application.learning import InMemoryLearningRepository, LearningService
 from learngraph_lite.application.lessons import InMemoryLessonRepository, LessonService
@@ -30,9 +30,9 @@ class DemoModel:
 
 
 def build_demo() -> dict[str, str]:
-    loop = AgentLoop(AgentRunner(DemoModel(), ToolRegistry()))
-
-    planning = PlanningService(InMemoryPlanningRepository())
+    planning_repository, learning_repository = InMemoryPlanningRepository(), InMemoryLearningRepository()
+    loop = build_learning_loop(DemoModel(), planning_repository, learning_repository)
+    planning = PlanningService(planning_repository)
     goal, questions = planning.create_goal(
         "demo-goal",
         "四周做出 RAG 应用",
@@ -59,7 +59,7 @@ def build_demo() -> dict[str, str]:
     grounded_answer, citations = docs.answer_with_citations("demo-goal", "citations", "chunking retrieval citation")
     empty_answer, empty_citations = docs.answer_with_citations("demo-goal", "citations", "unrelated zebra")
 
-    learning = LearningService(InMemoryLearningRepository(), loop)
+    learning = LearningService(learning_repository, loop)
     learning.start_goal(graph)
     lesson_reply = learning.learn_node("demo-goal", "rag-goal", "解释 RAG 的目标和边界", "learn-1")
     for index in range(3):

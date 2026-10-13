@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from learngraph_lite.agent_core import AgentRunner, ModelResponse, TextMessage, Tool, ToolCall, ToolRegistry
+from learngraph_lite.agent_core.models import ModelGateway
 from learngraph_lite.application.agent import AgentLoop, RunRequest
+from learngraph_lite.application.learning import LearningRepository
+from learngraph_lite.application.learning_agent import LearningContext
+from learngraph_lite.application.planning import PlanningRepository
 
 
 @dataclass
@@ -48,6 +53,11 @@ def build_fixture_loop() -> AgentLoop:
     return AgentLoop(AgentRunner(FixtureModel(), build_echo_tools()))
 
 
+def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learning: LearningRepository) -> AgentLoop:
+    context = LearningContext(planning, learning)
+    return AgentLoop(AgentRunner(model, build_echo_tools()), prepare_run=lambda request: context.prepare(model, request))
+
+
 def smoke() -> str:
     loop = build_fixture_loop()
     record = loop.run(RunRequest(session_id="local", user_text="开始", idempotency_key="smoke"))
@@ -79,14 +89,20 @@ def build_real_gateway():
     )
 
 
-def create_real_app():
+def create_real_app(*, database: str | Path | None = None):
     """Explicit real-model factory; missing configuration fails at startup."""
     from learngraph_lite.presentation.http import create_app
+    from learngraph_lite.infrastructure import SQLiteLearningRepository, SQLitePlanningRepository
 
     gateway = build_real_gateway()
     try:
-        loop = AgentLoop(AgentRunner(gateway, build_echo_tools()))
-        return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close)
+        database_path = Path(database or os.environ.get("LEARNGRAPH_DATABASE_PATH", ".local/learngraph.sqlite3"))
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        planning = SQLitePlanningRepository(database_path)
+        learning = SQLiteLearningRepository(database_path)
+        loop = build_learning_loop(gateway, planning, learning)
+        return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close,
+                          learning_context=LearningContext(planning, learning))
     except Exception:
         gateway.close()
         raise

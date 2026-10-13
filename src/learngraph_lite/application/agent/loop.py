@@ -28,6 +28,14 @@ class RunRequest:
     user_text: str
     idempotency_key: str
     mode: str = "runner"
+    goal_id: str | None = None
+    node_id: str | None = None
+
+
+@dataclass(frozen=True)
+class PreparedRun:
+    runner: AgentRunner
+    messages: tuple[TextMessage, ...]
 
 
 @dataclass(frozen=True)
@@ -59,9 +67,13 @@ class AgentLoop:
         self,
         runner: AgentRunner,
         direct_handlers: dict[str, Callable[[RunRequest], str]] | None = None,
+        *,
+        prepare_run: Callable[[RunRequest], PreparedRun] | None = None,
     ):
         self._runner = runner
         self._direct_handlers = direct_handlers or {}
+        self._prepare_run = prepare_run
+        self._session_scopes: dict[str, tuple[str | None, str | None]] = {}
         self._records_by_key: dict[tuple[str, str], RunRecord] = {}
         self._requests_by_key: dict[tuple[str, str], RunRequest] = {}
         self._records_by_id: dict[str, RunRecord] = {}
@@ -91,18 +103,24 @@ class AgentLoop:
     def _admit(self, request: RunRequest, budget: Budget) -> tuple[RunRecord, bool]:
         if self._closed:
             raise RunAdmissionError("shutting_down", "application is shutting down")
+        if (request.goal_id is None) != (request.node_id is None):
+            raise RunAdmissionError("invalid_scope", "goal_id and node_id must be provided together")
         key = (request.session_id, request.idempotency_key)
         existing = self._records_by_key.get(key)
         if existing is not None:
             if self._requests_by_key[key] != request:
                 raise RunAdmissionError("idempotency_conflict", "request ID was already used for different input")
             return existing, False
+        scope = (request.goal_id, request.node_id)
+        if request.session_id in self._session_scopes and self._session_scopes[request.session_id] != scope:
+            raise RunAdmissionError("session_scope_conflict", "use a new session when changing goal or node")
         if any(self._records_by_id[run_id].session_id == request.session_id for run_id in self._active):
             raise RunAdmissionError("session_busy", "this session already has an active run")
         if len(self._active) >= 2:
             raise RunAdmissionError("capacity_exceeded", "at most two runs can execute at once")
         record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued")
         self._records_by_key[key] = record
+        self._session_scopes[request.session_id] = scope
         self._requests_by_key[key] = request
         self._records_by_id[record.run_id] = record
         self._events_by_run[record.run_id] = []
@@ -127,10 +145,12 @@ class AgentLoop:
                         self._finish(record, "completed", summary="direct generation completed")
                 return
 
-            result = self._runner.run(
-                (TextMessage(role="user", content=request.user_text),),
-                budget=budget,
-            )
+            prepared = PreparedRun(self._runner, (TextMessage(role="user", content=request.user_text),))
+            if request.goal_id is not None:
+                if self._prepare_run is None:
+                    raise ValueError("node learning is not configured for this entry point")
+                prepared = self._prepare_run(request)
+            result = prepared.runner.run(prepared.messages, budget=budget)
             with self._condition:
                 if record.status not in TERMINAL_STATUSES:
                     record.final_text = result.final_text

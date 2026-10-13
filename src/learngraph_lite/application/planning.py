@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from learngraph_lite.domain.learning import (
     GoalDraft,
@@ -25,6 +26,12 @@ class PlanningState:
     clarification_round: int = 0
 
 
+class PlanningRepository(Protocol):
+    def save(self, goal_id: str, state: PlanningState) -> None: ...
+
+    def get(self, goal_id: str) -> PlanningState: ...
+
+
 @dataclass
 class InMemoryPlanningRepository:
     """In-memory port implementation for offline M2 tests."""
@@ -42,7 +49,7 @@ class InMemoryPlanningRepository:
 
 
 class PlanningService:
-    def __init__(self, repository: InMemoryPlanningRepository):
+    def __init__(self, repository: PlanningRepository):
         self._repository = repository
 
     def create_goal(self, goal_id: str, title: str, **fields: object) -> tuple[GoalDraft, tuple[str, ...]]:
