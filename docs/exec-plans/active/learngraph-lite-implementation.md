@@ -17,7 +17,7 @@
 - [x] M1：新增少量纯领域规则，证明判分/图谱校验不依赖模型或 Runner。
 - [x] M1：新增轻量 import 边界检查并接入 CI。
 - [ ] M1：补 HTTP/SSE 最小生命周期、运行摘要与取消状态的真实路由测试；已完成无依赖公共生命周期与 SSE 投影离线切片，FastAPI 真实路由仍待接入。
-- [x] M2：目标澄清、确认、图谱草稿/编辑/发布、revision 与规划离线 E2E。
+- [x] M2：目标澄清、确认、图谱草稿/编辑/发布、revision、规划离线 E2E 与 planning state 最小 SQLite 持久化。
 - [x] M3：节点 Agent 学习、单选题生成、服务端判分、进度与下一步离线闭环。
 - [x] M4A：TXT/Markdown 文档解析、分块、简单中英文检索、绑定、引用定位与空召回离线切片。
 - [x] M4B：声明式学习页、固定组件、事件 ACK、解释任务幂等离线切片。
@@ -33,6 +33,7 @@
 - 2026-10-13：M1 生命周期补强完成 AgentLoop run_id 查询、seq 事件、运行摘要、usage 汇总、预算耗尽映射、取消终态和 presentation 公共 DTO/SSE 编码；当前环境无 FastAPI/Starlette，真实 HTTP 路由测试仍待后续依赖接入。
 - 2026-10-13：M5 离线评估切片新增 evals/cases/offline-m5.json、evals/run.py 和固定报告，覆盖规划、图谱、学习、资料、学习页、提案和运行生命周期 20 个 deterministic case；报告明确真实模型 smoke 未运行。
 - 2026-10-13：M5 fixture demo 切片新增 scripts/run-fixture-demo.py 和 docs/demo/fixture-demo.md，串起目标确认、图谱发布、资料引用、空召回、节点学习、练习掌握、下一步、声明式学习页与图谱提案；输出明确标记为 deterministic fixture demo。
+- 2026-10-13：SQLite planning persistence 最小切片完成 `SQLitePlanningRepository`，用标准库 sqlite3 持久化目标草稿、澄清轮次和当前图谱快照，验证重新实例化 repository 后可恢复已确认目标与已发布图谱；完整业务 SQLite schema、迁移、练习/资料/事件持久化仍待后续接入。
 
 ## 验收与交接
 
@@ -55,10 +56,12 @@
   - npm.cmd run demo:fixture：M5 fixture demo 切片通过，生成 docs/demo/fixture-demo.md。
   - python scripts/run-python-tests.py：M5 fixture demo 切片通过，36 Python tests passed。
   - npm.cmd run ci：M5 fixture demo 切片通过，包含 Python 边界检查、36 个 Python 测试和 19 个 Node 模板工具测试。
+  - python scripts/run-python-tests.py：SQLite planning persistence 切片通过，38 Python tests passed。
+  - python scripts/check-python-boundaries.py：SQLite planning persistence 切片通过，输出 Python import boundaries passed。
 - 未执行的检查、阻塞和遗留事项：
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
-  - FastAPI/React/SQLite/P1 功能尚未实现。
+  - FastAPI/React/P1 功能尚未实现；SQLite 目前只覆盖 planning state 最小 repository，不代表完整业务持久化。
   - M1 真实 HTTP/SSE 路由测试未执行；当前只验证应用层生命周期与 presentation SSE 编码，不声称已完成 FastAPI 路由。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析与 SQLite FTS5 适配器未实现。
   - M4B 当前只有后端声明式包与事件用例；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。

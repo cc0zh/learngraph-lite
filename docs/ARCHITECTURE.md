@@ -1,6 +1,6 @@
 # 架构总览
 
-LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前仓库处于离线核心实现阶段：已建立 Python 分层骨架、独立 Agent 内核、应用层 AgentLoop、领域学习规则、公共运行事件投影和离线测试；FastAPI、React、SQLite 与真实模型适配仍按执行计划推进。
+LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前仓库处于离线核心实现阶段：已建立 Python 分层骨架、独立 Agent 内核、应用层 AgentLoop、领域学习规则、公共运行事件投影、planning state 最小 SQLite 持久化和离线测试；FastAPI、React、完整业务持久化与真实模型适配仍按执行计划推进。
 
 正式规格以 docs/从零构建功能文档.md 为准。本文记录当前实现边界，避免把目录名误当作架构完成。
 
@@ -9,7 +9,7 @@ LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前仓�
 - src/learngraph_lite/agent_core/：通用 AgentRunner、工具注册表、模型协议和预算控制。不能导入 LearnGraph 领域、HTTP、ORM 或基础设施。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。不能导入 Agent 内核、应用层或基础设施。
 - src/learngraph_lite/application/：应用用例与编排。当前包含 AgentLoop，负责运行准入、幂等、预算注入、运行摘要、公共事件和唯一终态。
-- src/learngraph_lite/infrastructure/：后续放模型 SDK、SQLite、文档解析、检索等适配器。
+- src/learngraph_lite/infrastructure/：基础设施适配器。当前有 `SQLitePlanningRepository`，用 Python 标准库 sqlite3 保存目标草稿、澄清轮次和当前图谱快照；模型 SDK、完整业务 SQLite schema、文档解析和检索适配器仍待接入。
 - src/learngraph_lite/presentation/：当前包含无框架公共 DTO/SSE 编码；后续放 FastAPI 路由与前端入口适配。
 - src/learngraph_lite/bootstrap.py：显式装配 fixture 模型和工具，供 M1 smoke 使用；导入包本身不启动 Web 或数据库。
 - tests/：同时保留模板 Node 工具测试与新增 Python 架构/内核/领域测试。
@@ -23,6 +23,8 @@ LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前仓�
     presentation -> application -> agent_core
     infrastructure -> application/domain/agent_core 的端口或协议
     bootstrap -> presentation/application/infrastructure
+
+当前 SQLite 持久化边界：只覆盖 M2 planning state 的 `save/get` repository port，用于验证刷新或重启 repository 后可以恢复已确认目标与已发布图谱。它没有引入 ORM、迁移工具或 P1 全量业务表，也不覆盖练习、资料、学习页事件和运行生命周期。
 
 当前离线检查覆盖：
 
