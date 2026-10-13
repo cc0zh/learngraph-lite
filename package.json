@@ -16,9 +16,11 @@
     "release-package": "node scripts/release-package.cjs",
     "test:py": "uv run --locked python scripts/run-python-tests.py",
     "dev:api": "uv run --locked uvicorn learngraph_lite.bootstrap:create_fixture_app --factory --app-dir src --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 2",
-    "check:py-boundaries": "python scripts/check-python-boundaries.py",
-    "smoke:fixture": "python scripts/run-fixture-smoke.py",
-    "eval:offline": "python evals/run.py",
-    "demo:fixture": "python scripts/run-fixture-demo.py"
+    "dev:api:real": "uv run --locked uvicorn learngraph_lite.bootstrap:create_real_app --factory --app-dir src --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 2",
+    "check:py-boundaries": "uv run --locked python scripts/check-python-boundaries.py",
+    "smoke:fixture": "uv run --locked python scripts/run-fixture-smoke.py",
+    "smoke:real": "uv run --locked python scripts/run-model-smoke.py",
+    "eval:offline": "uv run --locked python evals/run.py",
+    "demo:fixture": "uv run --locked python scripts/run-fixture-demo.py"
   }
 }

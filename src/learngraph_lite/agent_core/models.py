@@ -13,6 +13,7 @@ class TextMessage:
     role: Role
     content: str
     tool_call_id: str | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 @dataclass(frozen=True)

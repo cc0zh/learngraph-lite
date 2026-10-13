@@ -6,7 +6,7 @@ import asyncio
 import math
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -70,6 +70,7 @@ def create_app(
     model_mode: Literal["fixture", "real"] = "fixture",
     model_configured: bool = False,
     heartbeat_seconds: float = 15.0,
+    on_close: Callable[[], None] | None = None,
 ) -> FastAPI:
     """Create a process-local API, with cooperative shutdown and snapshot-first SSE."""
     if not math.isfinite(heartbeat_seconds) or heartbeat_seconds <= 0:
@@ -82,7 +83,11 @@ def create_app(
         try:
             yield
         finally:
-            await asyncio.to_thread(loop.close)
+            try:
+                await asyncio.to_thread(loop.close)
+            finally:
+                if on_close is not None:
+                    await asyncio.to_thread(on_close)
 
     app = FastAPI(
         title="LearnGraph Lite", version="0.1.0", lifespan=lifespan,

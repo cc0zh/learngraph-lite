@@ -5,9 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from pydantic import BaseModel, ValidationError
+
 
 class ToolError(RuntimeError):
     """A tool failed in a way that should be returned to the model."""
+
+
+InputModel = type[BaseModel]
 
 
 @dataclass(frozen=True)
@@ -16,6 +21,19 @@ class Tool:
     description: str
     input_schema: dict[str, Any]
     handler: Callable[[dict[str, Any]], Any]
+    input_model: InputModel | None = None
+
+    @classmethod
+    def from_model(
+        cls,
+        name: str,
+        description: str,
+        input_model: InputModel,
+        handler: Callable[[dict[str, Any]], Any],
+    ) -> "Tool":
+        schema = input_model.model_json_schema()
+        schema["additionalProperties"] = False
+        return cls(name, description, schema, handler, input_model)
 
     def as_model_tool(self) -> dict[str, Any]:
         return {
@@ -26,6 +44,15 @@ class Tool:
                 "parameters": self.input_schema,
             },
         }
+
+    def execute(self, args: dict[str, Any]) -> Any:
+        if self.input_model is None:
+            return self.handler(args)
+        try:
+            validated = self.input_model.model_validate(args, strict=True, extra="forbid")
+        except ValidationError as exc:
+            raise ToolError(f"invalid arguments for tool {self.name}: {exc}") from exc
+        return self.handler(validated.model_dump(mode="python"))
 
 
 @dataclass

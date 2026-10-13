@@ -84,7 +84,7 @@
   - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
   - React/P1 与完整业务 HTTP 尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
   - HTTP run/事件/请求去重仅在进程内存中，未接入业务 repository、重启恢复或 token streaming；同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
-  - 真实模型接入前需补齐 assistant tool_calls/tool 消息配对和工具参数 schema 校验，见 tech-debt-tracker.md；Starlette TestClient 的 httpx 弃用提示也已记录。
+  - assistant tool_calls/tool 消息配对和 Pydantic 工具参数校验已完成；真实供应商兼容性仍待 smoke 验证，见 tech-debt-tracker.md；Starlette TestClient 的 httpx 弃用提示也已记录。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析和前端原文页未实现。
   - M4B 当前已完成后端声明式包、事件用例和 SQLite 最小持久化；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
   - fixture demo 不是浏览器录屏或真实模型演示；M5 仍需真实模型 smoke 与最终演示交接材料。
@@ -103,3 +103,17 @@
 - 验收：阻塞模型下 POST 及时返回 202；重复提交不重跑；同 session 409、全局 429；取消终态不被晚到结果覆盖，调用退出前不释放名额；真实 TCP SSE 在模型结束前收到快照、started 和 heartbeat；关机协作停止。
 - 证据：tests/test_http_runs.py 覆盖上述边界、唯一终态、断线不取消/重连只取快照、Host/Origin 和活跃 SSE 下的关闭；独立 Uvicorn 进程 smoke 验证本地 factory。README 给出锁定依赖安装与提交/查询/SSE 命令。
 - 限制：本切片不宣称 token streaming、run 重启恢复、完整业务 HTTP/React 或真实模型能力；这些仍属于总计划待办。
+
+## 原生模型与工具调用切片（已完成）
+
+- 定位：优先补简历作品的 Agent 核心调用链，复用 OpenAI 官方 SDK 和 Pydantic，不扩展企业平台、安全治理或多供应商管理。
+- 调研：重读 nanobot 固定 commit `23941355a8932609d7fc7ba2820f162d1ea7bea5` 的 runner 与 OpenAI Python SDK 官方示例；重点参考 assistant/tool 消息回注顺序、SDK timeout、关闭隐式重试和显式连接清理。GitHub tree API 仍受限，不把猜测路径当核验结果。
+- [x] 用 Pydantic 参数模型生成工具 schema 并执行严格校验；保留完整 assistant tool_calls 与对应 tool_call_id，参数错误回注供模型修正。
+- [x] 引入官方 OpenAI-compatible Chat Completions 适配器，明确模型/endpoint/key 配置、有限 timeout/output 上限、关闭 SDK 隐式重试、usage 与可读失败。
+- [x] 提供独立真实模式启动和可复现 smoke 脚本（普通回答 + 原生 tool calling）；未配置时明确失败，保持 fixture 入口可独立运行。真实供应商执行仍待 Key。
+- [x] 用官方 SDK 的模拟 HTTP transport 验证完整请求/回注与错误边界；合并同类验证为少量行为测试，完成后执行一次全套 CI 与 20 例离线回归。
+- [x] 更新复用记录、架构、README、history/学习笔记并随本切片提交。本轮不配置外部 Key，不把模拟服务或 SDK 协议测试称为真实供应商 smoke。
+- 已收敛：上一 HTTP/SSE 切片独立提交 `7dd6126`，基线 57 Python + 19 Node 测试通过；后续测试增长以新增行为边界为依据。
+- 验证：`uv sync --locked --group dev` 成功；核验安装 SDK 的 metadata、LICENSE 与所用参数。`npm.cmd run ci` 通过文档/仓库/Action 检查、Python import 边界、61 个 Python 测试和 19 个 Node 测试；`npm.cmd run eval:offline` 通过 20/20，`npm.cmd run smoke:fixture` 成功。
+- 协议证据：官方 SDK + HTTPX MockTransport 验证多工具消息配对、错误参数修复、usage 汇总、实际 HTTP 请求参数、超时/连接/HTTP 错误脱敏和零重试；real factory 测试验证缺配置失败、有限超时配置和 lifespan 客户端清理。
+- 剩余范围：真实供应商 smoke 未执行；当前 real 入口仅注册 echo，使用 `max_tokens` 的 Chat Completions，未接业务工具、Responses API 或 token streaming。React、完整业务 HTTP/SQLite 与 M5 最终交接继续按总计划推进。

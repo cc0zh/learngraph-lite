@@ -3,7 +3,7 @@ name = "learngraph-lite"
 version = "0.1.0"
 description = "Local-first learning Agent application prototype."
 requires-python = ">=3.13"
-dependencies = ["fastapi==0.143.0", "uvicorn==0.54.0"]
+dependencies = ["fastapi==0.143.0", "openai==1.109.1", "pydantic==2.14.1", "uvicorn==0.54.0"]
 
 [dependency-groups]
 dev = ["httpx==0.28.1"]

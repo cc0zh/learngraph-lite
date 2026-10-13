@@ -40,8 +40,14 @@ class AgentRunner:
                 response = self._model.complete(tuple(transcript), self._tools.model_tools())
                 _merge_usage(usage, response)
                 budget.check_step(step)
-                if response.content:
-                    transcript.append(TextMessage(role="assistant", content=response.content))
+                if response.content or response.tool_calls:
+                    transcript.append(
+                        TextMessage(
+                            role="assistant",
+                            content=response.content,
+                            tool_calls=response.tool_calls,
+                        )
+                    )
 
                 if not response.tool_calls:
                     return RunnerResult(
@@ -67,8 +73,13 @@ class AgentRunner:
                         errors.append(error)
                         transcript.append(TextMessage(role="tool", content=error, tool_call_id=call.id))
                         continue
+                    if not isinstance(args, dict):
+                        error = f"invalid arguments for tool {call.name}: expected a JSON object"
+                        errors.append(error)
+                        transcript.append(TextMessage(role="tool", content=error, tool_call_id=call.id))
+                        continue
                     try:
-                        result = tool.handler(args)
+                        result = tool.execute(args)
                     except ToolError as exc:
                         result = {"error": str(exc)}
                         errors.append(str(exc))

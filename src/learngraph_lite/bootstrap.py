@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from learngraph_lite.agent_core import AgentRunner, ModelResponse, TextMessage, Tool, ToolCall, ToolRegistry
 from learngraph_lite.application.agent import AgentLoop, RunRequest
@@ -22,21 +25,27 @@ class FixtureModel:
         )
 
 
-def build_fixture_loop() -> AgentLoop:
+class EchoInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    text: str = Field(min_length=1, max_length=1000)
+
+
+def build_echo_tools() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(
-        Tool(
+        Tool.from_model(
             name="echo",
-            description="Return the input text for fixture smoke checks.",
-            input_schema={
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
-            },
+            description="Return the input text to verify a native tool calling round trip.",
+            input_model=EchoInput,
             handler=lambda args: {"text": args["text"]},
         )
     )
-    return AgentLoop(AgentRunner(FixtureModel(), registry))
+    return registry
+
+
+def build_fixture_loop() -> AgentLoop:
+    return AgentLoop(AgentRunner(FixtureModel(), build_echo_tools()))
 
 
 def smoke() -> str:
@@ -52,6 +61,35 @@ def create_fixture_app():
     from learngraph_lite.presentation.http import create_app
 
     return create_app(build_fixture_loop(), model_mode="fixture")
+
+
+def build_real_gateway():
+    from learngraph_lite.infrastructure.openai_gateway import OpenAIChatGateway
+
+    api_key = os.environ.get("MODEL_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    model = os.environ.get("MODEL_NAME")
+    if not api_key or not model:
+        raise RuntimeError("real model mode requires MODEL_API_KEY (or OPENAI_API_KEY) and MODEL_NAME")
+    return OpenAIChatGateway(
+        api_key=api_key,
+        model=model,
+        base_url=os.environ.get("MODEL_BASE_URL"),
+        timeout=float(os.environ.get("MODEL_TIMEOUT_SECONDS", "30")),
+        max_output_tokens=int(os.environ.get("MODEL_MAX_OUTPUT_TOKENS", "1024")),
+    )
+
+
+def create_real_app():
+    """Explicit real-model factory; missing configuration fails at startup."""
+    from learngraph_lite.presentation.http import create_app
+
+    gateway = build_real_gateway()
+    try:
+        loop = AgentLoop(AgentRunner(gateway, build_echo_tools()))
+        return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close)
+    except Exception:
+        gateway.close()
+        raise
 
 
 if __name__ == "__main__":

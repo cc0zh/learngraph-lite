@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pydantic import BaseModel, ConfigDict
+
 from learngraph_lite.agent_core import AgentRunner, Budget, ModelResponse, TextMessage, Tool, ToolCall, ToolError, ToolRegistry
 
 
@@ -50,7 +52,9 @@ def test_runner_round_trips_tool_result_with_full_tool_call_id():
     )
     result = AgentRunner(model, registry()).run((TextMessage(role="user", content="add"),))
     tool_messages = [message for message in result.messages if message.role == "tool"]
+    assistant_messages = [message for message in result.messages if message.role == "assistant"]
     assert result.status == "completed"
+    assert assistant_messages[0].tool_calls[0].id == "call-123"
     assert tool_messages[0].tool_call_id == "call-123"
     assert '"sum": 5' in tool_messages[0].content
 
@@ -87,3 +91,43 @@ def test_runner_stops_on_budget_or_cancel():
         budget=Budget(cancelled=True),
     )
     assert cancelled.status == "cancelled"
+
+
+class AddInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    a: int
+    b: int
+
+
+def test_pydantic_tool_schema_and_validation_errors_are_returned_to_model():
+    calls: list[dict] = []
+
+    def add(args):
+        calls.append(args)
+        return {"sum": args["a"] + args["b"]}
+
+    tools = ToolRegistry()
+    tools.register(Tool.from_model("add", "Add two numbers.", AddInput, add))
+    model = ScriptedModel(
+        [
+            ModelResponse(tool_calls=(
+                ToolCall(id="missing", name="add", arguments='{"a":2}'),
+                ToolCall(id="extra", name="add", arguments='{"a":2,"b":3,"extra":1}'),
+                ToolCall(id="coercion", name="add", arguments='{"a":"2","b":3}'),
+                ToolCall(id="array", name="add", arguments='[]'),
+            )),
+            ModelResponse(tool_calls=(ToolCall(id="repair", name="add", arguments='{"a":2,"b":3}'),)),
+            ModelResponse(content="sum is 5"),
+        ]
+    )
+
+    result = AgentRunner(model, tools).run((TextMessage(role="user", content="add"),))
+
+    assert result.status == "completed"
+    assert calls == [{"a": 2, "b": 3}]
+    assert len(result.errors) == 4
+    assert "invalid arguments for tool add" in result.messages[2].content
+    assert [m.tool_call_id for m in result.messages if m.role == "tool"] == [
+        "missing", "extra", "coercion", "array", "repair"]
+    assert tools.model_tools()[0]["function"]["parameters"]["required"] == ["a", "b"]
