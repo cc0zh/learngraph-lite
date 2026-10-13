@@ -2,7 +2,7 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及节点上下文、下一步推荐、资料检索、回答引用和结构化练习生成。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
+当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料检索、回答引用和结构化练习生成。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
 
 ## 开发准备
 
@@ -65,7 +65,7 @@ $env:MODEL_NAME = '<支持 Chat Completions 和 function tool calling 的模型�
 npm.cmd run dev:api:real
 ```
 
-macOS/Linux 对应设置 `export MODEL_API_KEY='...'` 和 `export MODEL_NAME='...'`，然后运行 `npm run dev:api:real`。`OPENAI_API_KEY` 可作为 Key 备用变量；`MODEL_BASE_URL` 未设置时使用 SDK 默认 OpenAI endpoint。`MODEL_TIMEOUT_SECONDS` 默认 30 秒，为 SDK 网络操作超时，并非整个 run 的硬截止时间；`MODEL_MAX_OUTPUT_TOKENS` 默认 1024，经 `max_tokens` 传递。仅支持接受该参数的 Chat Completions 模型；不宣称所有兼容 endpoint 或模型均可用。
+macOS/Linux 对应设置 `export MODEL_API_KEY='...'` 和 `export MODEL_NAME='...'`，然后运行 `npm run dev:api:real`。`OPENAI_API_KEY` 可作为 Key 备用变量；`MODEL_BASE_URL` 未设置时使用 SDK 默认 OpenAI endpoint。`MODEL_TIMEOUT_SECONDS` 默认 30 秒，为 SDK 网络操作超时，并非整个 run 的硬截止时间；`MODEL_MAX_OUTPUT_TOKENS` 默认 4096，经 `max_tokens` 传递，给结构化图谱更多输出空间。该上限尚未经真实模型验证；更多节点或较长解释可能需要调整，截断会记录为失败。仅支持接受该参数的 Chat Completions 模型；不宣称所有兼容 endpoint 或模型均可用。
 
 real API 使用相同的提交/查询/SSE 路径，`/api/model/status` 返回 `mode: real`、`configured: true`，只表示配置已装配，不表示供应商连通或认证成功。不带目标/节点的请求使用普通回答与协议验证 `echo`；带作用域的请求装配节点上下文，注册 `get_learning_context`、`get_next_action`、`search_documents` 和 `read_document_chunk`。SDK 隐式重试关闭，应用关闭会先等待工作线程退出再关闭客户端；fixture API 仍只用于协议演示。
 
@@ -89,7 +89,7 @@ $env:LEARNGRAPH_DATABASE_PATH = '.local/learning-demo.sqlite3'
 npm.cmd run dev:api:real
 ```
 
-脚本拒绝覆盖已有文件。real API 默认数据库为 `.local/learngraph.sqlite3`；启动仅初始化表，不创建目标或重置成绩。当前尚无完整规划 HTTP，可用上述脚本初始化独立演示数据。
+脚本拒绝覆盖已有文件。real API 默认数据库为 `.local/learngraph.sqlite3`；启动仅初始化表，不创建目标或重置成绩。可通过下述规划 HTTP 创建自己的目标，也可用上述脚本初始化独立演示数据。
 
 服务启动后读取上下文并提交节点请求：
 
@@ -111,6 +111,31 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/runs/$($run.run_id)/citations/C1"
 完成的节点回答在 GET run 与 SSE 中返回 `output.citation_map` 和 `output.unverified_citation_ids`。C1 等编号仅在本轮有效，来源记录含文档/片段 ID、版本、引用位置、内容摘要值、是否被引用及 `valid/stale/unavailable` 状态。未知编号保留为未验证，不提供来源；引用原文接口未知返回 404，内容变化或解绑返回 409。上面原文命令仅在本轮确实返回 C1 时可用。GET run 保留完成时快照，点击原文重新校验当前绑定和内容；无绑定/空召回要求明确说明资料不足，普通知识解释标注“非基于上传资料”。
 
 当前检索沿用简单中英文 tokenize + SQLite FTS5，不是 jieba/BM25 升级。来源有效性只证明片段可定位，不证明原文支持回答语义；同版本覆盖通过片段摘要值和位置检测失效，完整文档版本管理、上传/PDF 与前端原文页仍待完成。
+
+## 目标澄清与图谱规划
+
+以下路由仅由 real API 装配。创建目标后可请求模型澄清，也可直接确认并接受目标中记录的缺失信息假设。澄清仅保存问题，不代填字段、不自动确认；最多两轮，信息完整时不调用模型。每次写操作使用最新 GET 或 run 输出中的 `version`。
+
+| 方法与路径 | body / 结果 |
+| --- | --- |
+| GET /api/goals | 目标列表，包含规划状态 |
+| POST /api/goals | `{"title":"学习 RAG","desired_outcome":"完成检索 demo"}`，返回 201 和 goal_id |
+| GET /api/goals/{goal_id} | 当前目标、问题、图谱及 version |
+| PATCH /api/goals/{goal_id} | `{"expected_version":0,"current_level":"会 Python"}`；撤销确认、清空旧草稿与问题，保留累计澄清轮次 |
+| POST /api/goals/{goal_id}/clarify | `{"request_id":"clarify-1","expected_version":1}`，返回 202 run |
+| POST /api/goals/{goal_id}/confirm | `{"expected_version":2}`，显式确认 |
+| POST /api/goals/{goal_id}/graph-drafts | `{"request_id":"graph-1","expected_version":3}`，返回 202 run；node_count 可选，默认 10、限 1–30 |
+| GET /api/goals/{goal_id}/graph | 当前规划状态，与目标 GET 相同结构 |
+| PATCH /api/goals/{goal_id}/graph | `{"expected_version":4,"nodes":[...],"edges":[...]}`，提交完整草稿，可增删改 |
+| POST /api/goals/{goal_id}/graph/publish | `{"expected_version":5,"expected_revision":0}`，发布并初始化学习快照 |
+
+表中版本号示例按各步成功写入递增。节点要求 id、title、explanation、learning_outcome、正整数 estimated_minutes 和 0–5 priority；依赖只允许 prerequisite，source 为 target 的前置，拒绝环、自环、未知节点和重复边。结构化候选至多修复一次，模型调用/修复共享 run 预算；run 输出保存本次提交快照。推荐仍先考虑近期答错，再按优先级、预计分钟与 ID 排序。
+
+规划任务内部按目标串行，共用全应用两并发和取消规则；公开 run 的 `task_ref` 为 `goal:{goal_id}`，不需要节点或 session_id。查询、SSE、取消与相同请求去重沿用 run API。版本过期或发布后直接覆盖返回 409，无效 body/图谱返回 422。目标 PATCH 至少包含一个字段；仅 time_budget_minutes 可用 null 清空，title 必须非空，其余文本/列表可用空字符串或空列表清空。
+
+当前模型图谱仅返回 `source_mode: general`，即非基于上传资料；目标含 document_ids 或已有资料绑定时拒绝生成，返回 grounding_unavailable。HTTP/模型不能覆盖已发布路线，后续修改需走已有离线提案用例（提案 HTTP 待接）。内部兼容方法 update_node/add_dependency 仍可把发布快照转回草稿，不能视为公开产品入口。
+
+目标、问题和图谱可从 SQLite 重启恢复，旧快照启动时补默认字段；run/root/去重仍仅在进程内。未提交失败可用新 request_id 和 retry_of_run_id 重试；取消与提交存在窄窗口，取消后先 GET 最新规划，版本改变时需重新审核并创建新任务，不能盲用旧版本重试。发布与学习初始化分属两次仓库写入，进程中断可能留下已发布但未初始化的状态；当前会拒绝节点上下文，尚无自动恢复/成绩迁移协议。
 
 ## 生成练习与作答
 
@@ -142,7 +167,7 @@ operation 与题目持久化于 SQLite；run/root 关联仍仅在当前进程可
 - src/learngraph_lite/agent_core/：独立 Agent 内核，包含模型协议、工具注册表、Runner 和预算控制。
 - src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入、运行摘要、公共事件和终态。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。
-- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run 路由、节点只读接口和练习生成/作答接口；HTTP 调用应用层用例。
+- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run 路由、目标澄清/图谱规划、节点只读接口和练习生成/作答接口；HTTP 调用应用层用例。
 - src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson 的最小 SQLite repository、SQLite FTS5 检索与官方 OpenAI SDK Chat Completions gateway；完整业务持久化、真实 PDF 解析和前端原文页仍待接入。
 
 更多边界见 docs/ARCHITECTURE.md。

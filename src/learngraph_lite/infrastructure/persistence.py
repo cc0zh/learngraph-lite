@@ -12,7 +12,7 @@ from pathlib import Path
 from learngraph_lite.application.documents import ChunkSearchResult
 from learngraph_lite.application.learning import LearningState
 from learngraph_lite.application.lessons import LessonState
-from learngraph_lite.application.planning import PlanningState
+from learngraph_lite.application.planning import PlanningError, PlanningState
 from learngraph_lite.domain.documents import Citation, Document, DocumentChunk, tokenize
 from learngraph_lite.domain.lessons import ComponentKind, LessonComponent, LessonEvent, LessonPackage
 from learngraph_lite.domain.learning import Attempt, ExerciseOption, ExercisePrivate, GoalDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus
@@ -33,37 +33,60 @@ class SQLitePlanningRepository:
     def save(self, goal_id: str, state: PlanningState) -> None:
         with closing(self._connect()) as connection:
             with connection:
-                connection.execute(
-                    """
-                    insert into planning_states(goal_id, goal_json, graph_json, clarification_round)
-                    values (?, ?, ?, ?)
-                    on conflict(goal_id) do update set
-                        goal_json = excluded.goal_json,
-                        graph_json = excluded.graph_json,
-                        clarification_round = excluded.clarification_round
-                    """,
-                    (
-                        goal_id,
-                        json.dumps(_goal_to_json(state.goal), ensure_ascii=False, sort_keys=True),
-                        json.dumps(_graph_to_json(state.graph), ensure_ascii=False, sort_keys=True) if state.graph else None,
-                        state.clarification_round,
-                    ),
-                )
+                self._save(connection, goal_id, state)
+
+    def _save(self, connection, goal_id, state):
+        connection.execute(
+            """insert into planning_states(goal_id, goal_json, graph_json, clarification_round, version, questions_json)
+            values (?, ?, ?, ?, ?, ?)
+            on conflict(goal_id) do update set goal_json=excluded.goal_json, graph_json=excluded.graph_json,
+                clarification_round=excluded.clarification_round, version=excluded.version,
+                questions_json=excluded.questions_json""",
+            (goal_id, json.dumps(_goal_to_json(state.goal), ensure_ascii=False, sort_keys=True),
+             json.dumps(_graph_to_json(state.graph), ensure_ascii=False, sort_keys=True) if state.graph else None,
+             state.clarification_round, state.version, json.dumps(state.questions, ensure_ascii=False)),
+        )
 
     def get(self, goal_id: str) -> PlanningState:
         with closing(self._connect()) as connection:
-            row = connection.execute(
-                "select goal_json, graph_json, clarification_round from planning_states where goal_id = ?",
-                (goal_id,),
-            ).fetchone()
+            return self._get(connection, goal_id)
+
+    def _get(self, connection, goal_id):
+        row = connection.execute(
+            "select goal_json, graph_json, clarification_round, version, questions_json from planning_states where goal_id = ?",
+            (goal_id,),
+        ).fetchone()
         if row is None:
             raise KeyError(f"unknown goal: {goal_id}")
-        goal_json, graph_json, clarification_round = row
+        goal_json, graph_json, clarification_round, version, questions_json = row
         return PlanningState(
             goal=_goal_from_json(json.loads(goal_json)),
             graph=_graph_from_json(json.loads(graph_json)) if graph_json else None,
             clarification_round=int(clarification_round),
+            version=int(version), questions=tuple(json.loads(questions_json)),
         )
+
+    def create(self, goal_id: str, state: PlanningState) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute("select 1 from planning_states where goal_id=?", (goal_id,)).fetchone():
+                    raise PlanningError("goal_exists", "Goal already exists.")
+                self._save(connection, goal_id, state)
+
+    def list_ids(self) -> tuple[str, ...]:
+        with closing(self._connect()) as connection:
+            return tuple(row[0] for row in connection.execute("select goal_id from planning_states order by goal_id"))
+
+    def mutate(self, goal_id, update):
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                state = self._get(connection, goal_id)
+                result = update(state)
+                state.version += 1
+                self._save(connection, goal_id, state)
+                return result
 
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
@@ -74,10 +97,17 @@ class SQLitePlanningRepository:
                         goal_id text primary key,
                         goal_json text not null,
                         graph_json text,
-                        clarification_round integer not null
+                        clarification_round integer not null,
+                        version integer not null default 0,
+                        questions_json text not null default '[]'
                     )
                     """
                 )
+                columns = {row[1] for row in connection.execute("pragma table_info(planning_states)")}
+                if "version" not in columns:
+                    connection.execute("alter table planning_states add column version integer not null default 0")
+                if "questions_json" not in columns:
+                    connection.execute("alter table planning_states add column questions_json text not null default '[]'")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._database_path)

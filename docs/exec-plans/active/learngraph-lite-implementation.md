@@ -157,3 +157,17 @@
 - 修复后验证：定向 `uv run python -c` 先遇缓存权限，获准后因没有设置 src import path 而失败；改回项目正式 `npm.cmd run test:py`，78 项通过。demo 命令、文档骨架与 diff 检查均通过；未重新运行与最终序列化修复无关的 Node/eval。
 - 测试收敛：新增六个聚合行为测试，覆盖直接/工具共用预算、一次修复、失败无半批、六次成功/第七次阻止、retry 复用/新 root、SQLite 竞争及冲突、取消/规划变化、HTTP/SSE 公共投影与并发首答；复用现有生命周期、SDK 与领域规则测试。SQLite registry 使用独立复合主键，模型调用不持有事务。
 - 限制：只实现调用/步骤/工具次数与协作取消，尚无 token/context/deadline；run/root 关联仅内存，不能通过旧 run ID 跨进程 retry；planning/learning 无跨仓库事务，保存前重读不能消除并发规划变更的窄窗口。整体计划仍 active。
+
+## 目标澄清与图谱生成 HTTP 切片（已完成）
+
+- 范围：目标列表/创建/编辑/确认，最多两轮模型澄清，结构化图谱生成、草稿替换/发布；复用 Loop、共享 gateway、Pydantic 与 SQLite。模型结果最多修复一次，不能自动确认或发布。
+- [x] 增加独立 planning version 与原子 mutate，验证生成期间编辑、同时发布和失败回滚；兼容旧 SQLite 快照。
+- [x] 补齐节点解释、学习结果与优先级，更新直接消费者保留字段；目标/图谱 HTTP 严格 Schema，版本冲突返回 409。
+- [x] 直接规划任务共用全局准入、预算与取消；验证两轮上限、候选失败不保存、取消、HTTP/SSE 和重启恢复。
+- [x] 同步文档/history/learning，完成相关检查、CI/eval/demo 并独立提交。
+- 边界：本轮图谱生成仅 general；有 document_ids 的目标拒绝生成，避免假 grounding。已发布路线不允许整批草稿覆盖，后续修改走现有提案用例；前端、资料型规划、session/run 持久化、真实供应商验证仍待后续。
+- 审查修复：生成输出改为本次提交快照，避免保存后重读混入后续编辑；空目标 PATCH 返回 422；内部兼容 update_node/add_dependency 保留 published 转 draft 行为，HTTP/模型禁止直接覆盖。real gateway 输出上限默认调整为 4096，尚未经真实模型验证。
+- 一致性限制：首次 HTTP 发布后初始化学习快照，两仓库写入非原子，中断恢复与成绩迁移仍待后续。资料绑定重查也非同事务；规划未提交失败可 retry，提交后取消需先 GET 最新规划并重新审核版本，没有持久生成 operation。
+- 测试收敛：新增七个聚合行为测试，覆盖澄清/跳过、图谱修复/共享预算/retry/取消、提交快照竞争、SQLite 编辑/发布竞争与回滚、HTTP 全流程/重启、共用准入及 grounding 拒绝、旧表迁移与推荐优先级；复用已有生命周期/SDK/领域规则测试。
+- 验证：`npm.cmd run ci` 通过文档/仓库/Action 检查、Python import 边界、85 个 Python 测试与 19 个 Node 测试；`eval:offline` 为 20/20；`demo:fixture`、`demo:learning-agent` 与 `smoke:fixture` 均退出 0（后者终端中文显示乱码）。离线报告/demo 生成文件无内容变化；既有 shutdown graceful timeout/CancelledError 和 TestClient 弃用提示仍出现。真实供应商 smoke/demo 未运行。
+- 失败及修复：首轮新增测试三个失败，分别使用了不存在的 Budget.cancel()、过早 close 触发取消、Windows sqlite connection 未显式关闭；修正测试的取消标志、执行等待与 closing 后 84 项通过。审查增加提交快照竞争用例并修正实现后，CI 85 项通过。总体 P0/P1/M5 仍未完成。

@@ -62,7 +62,8 @@ def recommend_next_action(
         )
 
     wrong_priority = {node_id: index for index, node_id in enumerate(recent_wrong_node_ids)}
-    available.sort(key=lambda node: (0 if node.id in wrong_priority else 1, wrong_priority.get(node.id, 999), node.estimated_minutes, node.id))
+    available.sort(key=lambda node: (0 if node.id in wrong_priority else 1, wrong_priority.get(node.id, 999),
+                                     -node.priority, node.estimated_minutes, node.id))
     chosen = available[0]
     reason_codes = ["available_after_prerequisites"]
     if chosen.id in wrong_priority:

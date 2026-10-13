@@ -97,8 +97,7 @@ def apply_operations(graph: GraphSnapshot, operations: tuple[GraphOperation, ...
             for index, node in enumerate(nodes):
                 if node.id == operation.node_id:
                     found = True
-                    nodes[index] = GraphNode(
-                        id=node.id,
+                    nodes[index] = replace(node,
                         title=operation.title if operation.title is not None else node.title,
                         estimated_minutes=operation.estimated_minutes if operation.estimated_minutes is not None else node.estimated_minutes,
                     )

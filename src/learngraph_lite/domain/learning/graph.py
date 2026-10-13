@@ -11,6 +11,9 @@ class GraphNode:
     id: str
     title: str
     estimated_minutes: int
+    explanation: str = ""
+    learning_outcome: str = ""
+    priority: int = 0
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,8 @@ def validate_graph(graph: GraphDraft) -> tuple[str, ...]:
             errors.append(f"node {node.id} title is required")
         if node.estimated_minutes <= 0:
             errors.append(f"node {node.id} estimated_minutes must be positive")
+        if not 0 <= node.priority <= 5:
+            errors.append(f"node {node.id} priority must be between 0 and 5")
     adjacency: dict[str, list[str]] = {node_id: [] for node_id in id_set}
     for edge in graph.edges:
         if edge.kind != "prerequisite":

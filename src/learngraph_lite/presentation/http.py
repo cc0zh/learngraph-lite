@@ -7,16 +7,20 @@ import math
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Callable, Literal
+from uuid import uuid4
 
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunRequest, TERMINAL_STATUSES
 from learngraph_lite.application.documents import DocumentAccessError
 from learngraph_lite.application.exercise_generation import ExerciseError, GenerateExercise
 from learngraph_lite.application.learning_agent import LearningContext, LearningContextError
+from learngraph_lite.application.planning import PlanningError, PlanningService
+from learngraph_lite.application.planning_generation import CandidateGraph
+from learngraph_lite.domain.learning import GoalDraft, GraphSnapshot, GraphValidationError, RevisionConflict
 from learngraph_lite.presentation.sse import encode_snapshot, encode_sse, public_run
 
 
@@ -69,11 +73,73 @@ class PublicExercise(BaseModel):
     options: list[PublicOption]
 
 
+class PlanningView(BaseModel):
+    goal_id: str
+    goal: GoalDraft
+    graph: GraphSnapshot | None
+    clarification_round: int
+    version: int
+    questions: list[str]
+
+
+class CreateGoal(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+    desired_outcome: str = Field(default="", max_length=2000)
+    current_level: str = Field(default="", max_length=2000)
+    time_budget_minutes: int | None = Field(default=None, ge=1)
+    constraints: str = Field(default="", max_length=2000)
+    document_ids: list[Identifier] = Field(default_factory=list, max_length=30)
+
+
+class EditGoal(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_version: int = Field(ge=0)
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)] | None = None
+    desired_outcome: str | None = Field(default=None, max_length=2000)
+    current_level: str | None = Field(default=None, max_length=2000)
+    time_budget_minutes: int | None = Field(default=None, ge=1)
+    constraints: str | None = Field(default=None, max_length=2000)
+    document_ids: list[Identifier] | None = Field(default=None, max_length=30)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_fields(cls, value):
+        if isinstance(value, dict) and not (value.keys() - {"expected_version"}):
+            raise ValueError("At least one goal field is required")
+        if isinstance(value, dict) and any(item is None for name, item in value.items() if name != "time_budget_minutes"):
+            raise ValueError("Only time_budget_minutes may be cleared with null")
+        return value
+
+
+class PlanningVersion(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_version: int = Field(ge=0)
+
+
+class PlanningTask(PlanningVersion):
+    request_id: Identifier
+    retry_of_run_id: Identifier | None = None
+
+
+class GraphTask(PlanningTask):
+    node_count: int = Field(default=10, ge=1, le=30)
+
+
+class EditGraph(CandidateGraph):
+    expected_version: int = Field(ge=0)
+
+
+class PublishGraph(PlanningVersion):
+    expected_revision: int = Field(ge=0)
+
+
 class AnswerSources(BaseModel):
     citation_map: dict[str, AnswerSource] = Field(default_factory=dict)
     unverified_citation_ids: list[str] = Field(default_factory=list)
     exercises: list[PublicExercise] | None = None
     source_mode: Literal["general"] | None = None
+    planning: PlanningView | None = None
 
 
 class SubmitExercises(BaseModel):
@@ -102,6 +168,7 @@ class LocatedSource(BaseModel):
 class PublicRun(BaseModel):
     run_id: str
     session_id: str
+    task_ref: str | None = None
     status: Literal["queued", "running", "completed", "failed", "cancelled", "budget_exceeded"]
     summary: str
     created_at: datetime
@@ -139,6 +206,8 @@ def create_app(
     on_close: Callable[[], None] | None = None,
     learning_context: LearningContext | None = None,
     exercises: GenerateExercise | None = None,
+    planning: PlanningService | None = None,
+    on_publish: Callable[[GraphSnapshot], None] | None = None,
 ) -> FastAPI:
     """Create a process-local API, with cooperative shutdown and snapshot-first SSE."""
     if not math.isfinite(heartbeat_seconds) or heartbeat_seconds <= 0:
@@ -202,6 +271,82 @@ def create_app(
     @app.exception_handler(ExerciseError)
     async def exercise_error(request: Request, exc: ExerciseError):
         return _error(404 if exc.code == "exercise_not_found" else 409, exc.code, str(exc))
+
+    @app.exception_handler(PlanningError)
+    async def planning_error(request: Request, exc: PlanningError):
+        return _error(404 if exc.code == "goal_not_found" else 409, exc.code, str(exc))
+
+    @app.exception_handler(RevisionConflict)
+    async def revision_error(request: Request, exc: RevisionConflict):
+        return _error(409, "revision_conflict", str(exc))
+
+    @app.exception_handler(GraphValidationError)
+    async def graph_error(request: Request, exc: GraphValidationError):
+        return _error(422, "invalid_graph", str(exc))
+
+    if planning is not None:
+        @app.get("/api/goals", response_model=list[PlanningView])
+        def list_goals():
+            return planning.list_goals()
+
+        @app.post("/api/goals", status_code=201, response_model=PlanningView)
+        def create_goal(body: CreateGoal):
+            goal_id = str(uuid4())
+            fields = body.model_dump()
+            planning.create_goal(goal_id, fields.pop("title"), **fields)
+            return planning.describe(goal_id)
+
+        @app.get("/api/goals/{goal_id}", response_model=PlanningView)
+        def get_goal(goal_id: Identifier):
+            return planning.describe(goal_id)
+
+        @app.patch("/api/goals/{goal_id}", response_model=PlanningView)
+        def edit_goal(goal_id: Identifier, body: EditGoal):
+            fields = body.model_dump(exclude_unset=True)
+            version = fields.pop("expected_version")
+            planning.edit_goal(goal_id, version, **fields)
+            return planning.describe(goal_id)
+
+        @app.post("/api/goals/{goal_id}/confirm", response_model=PlanningView)
+        def confirm_goal(goal_id: Identifier, body: PlanningVersion):
+            planning.confirm_goal(goal_id, body.expected_version)
+            return planning.describe(goal_id)
+
+        def planning_run(goal_id, body, mode):
+            return public_run(loop.submit(RunRequest(
+                session_id=f"planning:{goal_id}", task_ref=f"goal:{goal_id}", goal_id=goal_id,
+                user_text="澄清目标" if mode == "clarify" else "生成图谱", mode=mode,
+                idempotency_key=body.request_id, retry_of_run_id=body.retry_of_run_id,
+                planning_version=body.expected_version, graph_node_count=getattr(body, "node_count", 10),
+            )))
+
+        @app.post("/api/goals/{goal_id}/clarify", status_code=202, response_model=PublicRun, response_model_exclude_unset=True)
+        def clarify_goal(goal_id: Identifier, body: PlanningTask):
+            return planning_run(goal_id, body, "clarify")
+
+        @app.post("/api/goals/{goal_id}/graph-drafts", status_code=202, response_model=PublicRun, response_model_exclude_unset=True)
+        def generate_graph(goal_id: Identifier, body: GraphTask):
+            return planning_run(goal_id, body, "graph")
+
+        @app.get("/api/goals/{goal_id}/graph", response_model=PlanningView)
+        def get_graph(goal_id: Identifier):
+            return planning.describe(goal_id)
+
+        @app.patch("/api/goals/{goal_id}/graph", response_model=PlanningView)
+        def edit_graph(goal_id: Identifier, body: EditGraph):
+            try:
+                graph = body.graph()
+            except ValueError as exc:
+                return _error(422, "invalid_graph", str(exc))
+            planning.save_graph_draft(goal_id, graph.nodes, graph.edges, expected_version=body.expected_version)
+            return planning.describe(goal_id)
+
+        @app.post("/api/goals/{goal_id}/graph/publish", response_model=PlanningView)
+        def publish_graph(goal_id: Identifier, body: PublishGraph):
+            graph = planning.publish_graph(goal_id, body.expected_revision, body.expected_version)
+            if on_publish is not None:
+                on_publish(graph)
+            return planning.describe(goal_id)
 
     if exercises is not None:
         @app.post("/api/goals/{goal_id}/nodes/{node_id}/exercises", status_code=202,

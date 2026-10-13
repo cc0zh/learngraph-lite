@@ -14,9 +14,10 @@ from learngraph_lite.agent_core.gateway import budgeted
 from learngraph_lite.application.agent import AgentLoop, DirectResult, RunRequest
 from learngraph_lite.application.exercise_generation import GenerateExercise
 from learngraph_lite.application.documents import DocumentRepository
-from learngraph_lite.application.learning import LearningRepository
+from learngraph_lite.application.learning import LearningRepository, LearningService
 from learngraph_lite.application.learning_agent import LearningContext
-from learngraph_lite.application.planning import PlanningRepository
+from learngraph_lite.application.planning import PlanningRepository, PlanningService
+from learngraph_lite.application.planning_generation import GeneratePlanning
 
 
 @dataclass
@@ -60,6 +61,15 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
                         documents: DocumentRepository | None = None) -> AgentLoop:
     context = LearningContext(planning, learning, documents)
     generator = GenerateExercise(learning, context.context)
+    planner = GeneratePlanning(PlanningService(planning), documents)
+
+    def plan(request, budget, root_task_id):
+        gateway = budgeted(model, budget)
+        if request.mode == "clarify":
+            result = planner.clarify(request.goal_id, request.planning_version, gateway)
+        else:
+            result = planner.graph(request.goal_id, request.planning_version, request.graph_node_count, gateway)
+        return DirectResult("规划建议已保存，请审核后确认或发布。", result, dict(gateway.usage))
 
     def generate(request, budget, root_task_id):
         gateway = budgeted(model, budget)
@@ -70,8 +80,10 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
     def validate(request):
         if request.mode in {"exercise", "teaching"}:
             context.context(request.goal_id, request.node_id)
+        elif request.mode in {"clarify", "graph"}:
+            planner.validate(request.goal_id, request.mode, request.planning_version)
 
-    return AgentLoop(AgentRunner(model, build_echo_tools()), direct_handlers={"exercise": generate}, validate_run=validate,
+    return AgentLoop(AgentRunner(model, build_echo_tools()), direct_handlers={"exercise": generate, "clarify": plan, "graph": plan}, validate_run=validate,
                      prepare_run=lambda request, budget, root: context.prepare(budgeted(model, budget), request, root))
 
 
@@ -102,7 +114,7 @@ def build_real_gateway():
         model=model,
         base_url=os.environ.get("MODEL_BASE_URL"),
         timeout=float(os.environ.get("MODEL_TIMEOUT_SECONDS", "30")),
-        max_output_tokens=int(os.environ.get("MODEL_MAX_OUTPUT_TOKENS", "1024")),
+        max_output_tokens=int(os.environ.get("MODEL_MAX_OUTPUT_TOKENS", "4096")),
     )
 
 
@@ -121,7 +133,8 @@ def create_real_app(*, database: str | Path | None = None):
         loop = build_learning_loop(gateway, planning, learning, documents)
         return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close,
                           learning_context=LearningContext(planning, learning, documents),
-                          exercises=GenerateExercise(learning, LearningContext(planning, learning).context))
+                          exercises=GenerateExercise(learning, LearningContext(planning, learning).context),
+                          planning=PlanningService(planning), on_publish=LearningService(learning).start_goal)
     except Exception:
         gateway.close()
         raise

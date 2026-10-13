@@ -24,6 +24,8 @@ def public_run(record: RunRecord) -> dict[str, Any]:
     }
     if record.final_text:
         payload["final_text"] = record.final_text
+    if record.task_ref is not None:
+        payload["task_ref"] = record.task_ref
     if record.error:
         payload["error"] = record.error
     if record.usage:

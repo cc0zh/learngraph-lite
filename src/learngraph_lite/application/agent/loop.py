@@ -35,6 +35,9 @@ class RunRequest:
     exercise_count: int = 1
     exercise_purpose: str = "practice"
     retry_of_run_id: str | None = None
+    task_ref: str | None = None
+    planning_version: int = 0
+    graph_node_count: int = 10
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,7 @@ class RunRecord:
     goal_id: str | None = None
     node_id: str | None = None
     root_task_id: str = ""
+    task_ref: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -122,7 +126,11 @@ class AgentLoop:
     def _admit(self, request: RunRequest, budget: Budget) -> tuple[RunRecord, bool]:
         if self._closed:
             raise RunAdmissionError("shutting_down", "application is shutting down")
-        if (request.goal_id is None) != (request.node_id is None):
+        planning_task = request.mode in {"clarify", "graph"}
+        if planning_task:
+            if request.goal_id is None or request.node_id is not None or request.task_ref != f"goal:{request.goal_id}":
+                raise RunAdmissionError("invalid_scope", "planning tasks require a goal task_ref and no node")
+        elif request.task_ref is not None or (request.goal_id is None) != (request.node_id is None):
             raise RunAdmissionError("invalid_scope", "goal_id and node_id must be provided together")
         if request.mode in {"exercise", "teaching"} and request.goal_id is None:
             raise RunAdmissionError("invalid_scope", "this mode requires a goal and node")
@@ -155,7 +163,7 @@ class AgentLoop:
                 raise RunAdmissionError("invalid_retry", "retry must keep the original session and input")
             root_task_id = previous.root_task_id
         record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued",
-                           goal_id=request.goal_id, node_id=request.node_id)
+                           goal_id=request.goal_id, node_id=request.node_id, task_ref=request.task_ref)
         record.root_task_id = root_task_id or record.run_id
         self._records_by_key[key] = record
         self._session_scopes[request.session_id] = scope
