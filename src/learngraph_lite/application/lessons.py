@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from copy import deepcopy
+import json
 from threading import RLock
 from typing import Callable, Protocol, TypeVar
 
-from learngraph_lite.application.agent import AgentLoop, RunRequest
+from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunRecord, RunRequest
 from learngraph_lite.application.learning import LearningService
 from learngraph_lite.domain.learning.exercises import Attempt
 from learngraph_lite.domain.lessons import LessonEvent, LessonPackage, ack_event, build_lesson_package
@@ -113,7 +114,50 @@ class LessonService:
     def submit_choice_answer(self, goal_id: str, exercise_id: str, selected_option_id: str, attempt_id: str) -> Attempt:
         return self._learning.submit_answer(goal_id, exercise_id, selected_option_id, attempt_id)
 
+    def submit_explanation(self, session_id: str, goal_id: str, node_id: str, event_id: str,
+                           slot: str, request_id: str, retry_of_run_id: str | None = None) -> RunRecord:
+        """Build input exclusively from the ACK; AgentLoop admits/links before execution."""
+        if not slot.strip() or len(slot) > 128:
+            raise LessonError("invalid_lesson_event", "An explanation slot is required.")
+        state = self._repository.state(goal_id)
+        event = state.events.get(event_id)
+        if event is None:
+            raise LessonError("event_not_found", "ACK the lesson event before requesting explanation.")
+        package = state.packages.get(event.package_id)
+        if package is None:
+            raise LessonError("lesson_not_found", "Unknown lesson package.")
+        if package.node_id != node_id or package.version != event.package_version:
+            raise LessonError("event_conflict", "Event does not belong to this node/version.")
+        if package.schema_version != 1:
+            raise LessonError("outdated_lesson", "Legacy lessons are read-only.")
+        if event.action not in {"request_explanation", "step_changed"}:
+            raise LessonError("invalid_lesson_event", "This event does not request an explanation.")
+        component = ({"kind": "markdown", "props": {"text": package.markdown}} if event.component_id == "chapter"
+                     else next({"kind": item.kind.value, "props": item.props}
+                               for item in package.components if item.id == event.component_id))
+        summary = {"event_id": event.id, "package_id": package.id, "package_version": package.version,
+                   "content_revision": package.graph_content_revision, "component_id": event.component_id,
+                   "action": event.action, "payload": event.payload, "component": component,
+                   "explanation_slot": slot}
+        if component["kind"] == "quiz_choice":
+            summary["exercise"] = asdict(self._learning.lesson_exercise(package, component["props"]["exercise_id"]))
+        text = "解释以下服务端已保存的学习事件：\n" + json.dumps(summary, ensure_ascii=False, sort_keys=True)
+        if retry_of_run_id is not None:
+            try:
+                original = self._loop.request(retry_of_run_id)
+            except KeyError as exc:
+                raise RunAdmissionError("invalid_retry", "Unknown explanation run.") from exc
+            if (original.mode, original.session_id, original.goal_id, original.node_id,
+                    original.source_event_id, original.explanation_slot) != (
+                    "explanation", session_id, goal_id, node_id, event_id, slot):
+                raise RunAdmissionError("invalid_retry", "Retry must keep the original explanation scope.")
+            text = original.user_text
+        return self._loop.submit(RunRequest(session_id=session_id, user_text=text, idempotency_key=request_id,
+            mode="explanation", goal_id=goal_id, node_id=node_id, source_event_id=event_id,
+            explanation_slot=slot, retry_of_run_id=retry_of_run_id))
+
     def explain_event(self, goal_id: str, event_id: str, slot: str, request_id: str) -> str:
+        """Legacy synchronous offline demo cache; HTTP uses submit_explanation instead."""
         state = self._repository.state(goal_id)
         if event_id not in state.events:
             raise ValueError("unknown lesson event")

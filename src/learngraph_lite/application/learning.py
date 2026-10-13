@@ -94,6 +94,14 @@ class LearningService:
                     package.goal_id, package.node_id, package.graph_content_revision):
                 raise ValueError("lesson exercise must belong to the same goal, node and content revision")
 
+    def lesson_exercise(self, package: LessonPackage, exercise_id: str) -> ExercisePublic:
+        """Read only public question content for a saved lesson's explanation input."""
+        exercise = self._repository.get(package.goal_id).exercises.get(exercise_id)
+        if exercise is None or (exercise.node_id, exercise.graph_content_revision) != (
+                package.node_id, package.graph_content_revision):
+            raise ValueError("lesson exercise does not belong to this node/content revision")
+        return exercise.to_public()
+
     def learn_node(self, goal_id: str, node_id: str, user_text: str, request_id: str) -> str:
         if self._loop is None:
             raise RuntimeError("node learning requires an AgentLoop")

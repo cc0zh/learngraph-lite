@@ -1,5 +1,21 @@
 # LearnGraph Lite 从零实现计划
 
+## 运行恢复与事件解释切片（已完成）
+
+- 用户已要求继续推进，撤销上轮暂停。本轮完成 run/session 作用域、请求输入、root 与公共结果的 SQLite 持久化，以及事件解释 HTTP；不进入 React 或真实供应商评估。
+- 方案：沿用 AgentLoop 单进程、最多两条执行线程和标准库 SQLite。新增运行仓库端口；初始 run、输入与事件/slot 的逻辑任务关联在同一短事务提交，模型调用在事务外。事件已由 ACK 保存，解释只使用服务端保存的摘要。
+- 恢复：启动将遗留 queued/running 标 interrupted，不自动续跑或重新调用模型；完成结果可查，重复请求返回已有任务。失败/取消/中断显式 retry 保留 root 和初始输入，新 slot 才创建新解释任务。
+- 验收：并发不同 request_id 的事件/slot 去重、跨包/节点/版本校验、事务故障回滚、运行/输入/root 重开、SSE 快照、session 作用域及全局容量、解释失败/取消/中断显式重试，生成已提交产物在重试中复用；相关测试、CI、离线评估与演示通过后同步文档、history、学习记录并提交。
+- 限制：单 API 进程；不恢复模型流或跨进程 worker；有限会话历史组装、token/context/deadline 预算仍待后续。真实供应商未验证。
+- 实现：RunRepository 与 SQLiteRunRepository 接通 real factory，保存完整请求/session作用域/root、公共结果/usage和seq事件。恢复不调用模型，遗留任务转interrupted；GET session runs、旧run与SSE快照可读。准入失败原子回滚；终态保存失败不发布完成结果，live转interrupted并关闭新准入，durable保留上一状态待存储修复后重启。
+- 解释：HTTP拒绝客户端user_text，从已保存ACK/组件/公共题卡构造输入，校验节点/包版本/当前学习快照；首次事件关联、run和输入同SQLite短事务提交。业务键(goal,event,slot)在锁内并发复用最新attempt，跨session/不同输入冲突；显式retry保留root和原输入，新slot新任务。额外业务重复request ID不存别名，原始request ID仍返回原attempt。旧explain_event仅兼容离线demo/eval，不作为新HTTP实现。
+- 上游核验：读取nanobot固定commit的session/manager.py，参考SessionStore端口与先保存后更新内存；不复制/安装，不引入JSONL checkpoint或外部任务队列，记录见[复用说明](../../references/open-source-reuse.md)。
+- 测试收敛：新增7个聚合测试，覆盖completed/cancelled/queued/running重开、原输入/root/作用域/事件、6线程不同request ID同slot单次执行、ACK并发不丢关联、准入与状态/事件故障回滚、失败/取消/中断重试、HTTP错误码/列表/SSE/real factory恢复、公共题卡/包版本/过期/并发限额、产物已提交但run结果未保存时零模型调用复用。
+- 验证：专项7项通过；`npm.cmd run ci`通过111个Python、19个Node测试及Python import边界、文档/仓库/Action检查；`eval:offline`为20/20；`demo:fixture`、`demo:learning-agent`、`smoke:fixture`均exit 0。TestClient弃用提示与关闭测试预期graceful timeout/CancelledError仍存在，smoke终端中文显示乱码。真实供应商smoke/demo未执行。
+- 最后审查：提交run路由改为同步def，使同步SQLite准入/解释读取运行在FastAPI线程池；变更后`test:py`再次111项通过。文档骨架、相对引用路径与`git diff --check`通过。
+- 失败与修复：首次旧104项回归有1项错误码失败，session作用域校验抢在不存在节点校验前返回409，恢复validate先行后最终全套通过。新增专项第6项误用已发布图谱的草稿API，改为显式注入已接受内容revision场景；PowerShell中文字符串替换未命中，改用apply_patch后7项通过。恢复构造中持有Condition锁再提交interrupted，避免notify_all无锁。
+- 收尾：同步README、架构、技术债、[真实测试指南](../../demo/stage-review-real-testing.md)、[history](../../histories/2026-10/20261013-2055-run-recovery-explanations.md)与[逻辑任务/attempt学习笔记](../../learnings/2026-10/task-and-attempt-recovery.md)。本轮完成下一切片后恢复用户要求的暂缓，供阶段总结与真实测试；不进入React或其他阶段，P0/P1/M5尚未全部验收。
+
 ## 学习包生成与事件 HTTP 切片（已完成）
 
 - 范围：沿用 shared gateway、GenerationSources 和 direct/tool 同用例；生成固定 Markdown/quiz_choice/stepper/comparison_table，题卡只引用同目标/节点/内容 revision 的已有题，不含答案。top5 来源与一次 repair 共用来源表；保存前复验资料与业务版本。

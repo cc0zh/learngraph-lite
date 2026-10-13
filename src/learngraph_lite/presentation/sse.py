@@ -17,11 +17,15 @@ def public_run(record: RunRecord) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "run_id": record.run_id,
         "session_id": record.session_id,
+        "root_task_id": record.root_task_id,
         "status": record.status,
         "summary": record.summary,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
     }
+    if record.goal_id is not None:
+        payload["goal_id"] = record.goal_id
+        payload["node_id"] = record.node_id
     if record.final_text:
         payload["final_text"] = record.final_text
     if record.task_ref is not None:

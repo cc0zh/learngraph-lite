@@ -36,18 +36,31 @@ class SubmitRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: Identifier
-    user_text: str = Field(strict=True, min_length=1, max_length=16000)
+    user_text: str | None = Field(default=None, strict=True, min_length=1, max_length=16000)
     goal_id: Identifier | None = None
     node_id: Identifier | None = None
-    mode: Literal["runner", "teaching"] = "runner"
+    mode: Literal["runner", "teaching", "explanation"] = "runner"
     retry_of_run_id: Identifier | None = None
+    source_event_id: Identifier | None = None
+    explanation_slot: Identifier | None = None
 
     @field_validator("user_text")
     @classmethod
-    def nonempty_text(cls, value: str) -> str:
-        if not value.strip():
+    def nonempty_text(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
             raise ValueError("user_text must contain text")
         return value
+
+    @model_validator(mode="after")
+    def valid_input(self):
+        if self.mode == "explanation":
+            if any(value is None for value in (self.goal_id, self.node_id, self.source_event_id, self.explanation_slot)):
+                raise ValueError("Explanation requires goal, node, event and slot.")
+            if self.user_text is not None:
+                raise ValueError("Explanation input is constructed by the server.")
+        elif self.user_text is None or self.source_event_id is not None or self.explanation_slot is not None:
+            raise ValueError("Ordinary runs require user_text and no explanation reference.")
+        return self
 
 
 class AnswerSource(BaseModel):
@@ -236,8 +249,11 @@ class LocatedSource(BaseModel):
 class PublicRun(BaseModel):
     run_id: str
     session_id: str
+    root_task_id: str
+    goal_id: str | None = None
+    node_id: str | None = None
     task_ref: str | None = None
-    status: Literal["queued", "running", "completed", "failed", "cancelled", "budget_exceeded"]
+    status: Literal["queued", "running", "completed", "failed", "cancelled", "budget_exceeded", "interrupted"]
     summary: str
     created_at: datetime
     updated_at: datetime
@@ -324,7 +340,7 @@ def create_app(
     @app.exception_handler(RunAdmissionError)
     async def admission_error(request: Request, exc: RunAdmissionError):
         status = {"session_busy": 409, "capacity_exceeded": 429, "idempotency_conflict": 409,
-                  "shutting_down": 503, "invalid_scope": 422, "session_scope_conflict": 409, "invalid_retry": 409}
+                  "shutting_down": 503, "storage_unavailable": 503, "invalid_scope": 422, "session_scope_conflict": 409, "invalid_retry": 409}
         return _error(
             status[exc.code], exc.code, str(exc),
             retryable=exc.code in {"session_busy", "capacity_exceeded", "shutting_down"},
@@ -353,7 +369,7 @@ def create_app(
 
     @app.exception_handler(LessonError)
     async def lesson_error(request: Request, exc: LessonError):
-        status = 404 if exc.code == "lesson_not_found" else 422 if exc.code == "invalid_lesson_event" else 409
+        status = 404 if exc.code in {"lesson_not_found", "event_not_found"} else 422 if exc.code == "invalid_lesson_event" else 409
         return _error(status, exc.code, str(exc))
 
     @app.exception_handler(PlanningError)
@@ -586,13 +602,22 @@ def create_app(
     @app.post("/api/sessions/{session_id}/runs", status_code=202, response_model=PublicRun,
               response_model_exclude_unset=True,
               responses={code: {"model": ErrorEnvelope} for code in (409, 429, 503)})
-    async def submit_run(session_id: Identifier, body: SubmitRun):
+    def submit_run(session_id: Identifier, body: SubmitRun):
+        if body.mode == "explanation":
+            if lesson_events is None:
+                return _error(409, "explanation_not_configured", "Lesson explanations are not configured.")
+            return public_run(lesson_events.submit_explanation(session_id, body.goal_id, body.node_id,
+                body.source_event_id, body.explanation_slot, body.request_id, body.retry_of_run_id))
         record = loop.submit(RunRequest(
             session_id=session_id, user_text=body.user_text, idempotency_key=body.request_id,
             goal_id=body.goal_id, node_id=body.node_id,
             mode=body.mode, retry_of_run_id=body.retry_of_run_id,
         ))
         return public_run(record)
+
+    @app.get("/api/sessions/{session_id}/runs", response_model=list[PublicRun], response_model_exclude_unset=True)
+    async def session_runs(session_id: Identifier):
+        return [public_run(record) for record in loop.list_runs(session_id)]
 
     @app.get("/api/runs/{run_id}", response_model=PublicRun, response_model_exclude_unset=True,
              responses={404: {"model": ErrorEnvelope}})

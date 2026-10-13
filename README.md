@@ -2,7 +2,7 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料上传/PDF 解析、中文 BM25 检索、回答引用和资料型图谱/练习/学习包生成及事件 ACK。当前阶段已收尾，按用户要求暂缓后续开发；[阶段总结与真实测试](docs/demo/stage-review-real-testing.md) 提供测试入口和验收边界。React、解释 HTTP、run/session 持久化与 M5 最终交接尚未完成。
+当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson/run 的 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料上传/PDF 解析、中文 BM25 检索、回答引用和资料型图谱/练习/学习包生成、事件 ACK 与解释 HTTP。运行恢复与事件解释阶段已收尾，暂缓后续开发，供阶段总结与真实测试；[测试指南](docs/demo/stage-review-real-testing.md) 提供入口和验收边界。React、有限对话历史、提案 HTTP 与 M5 最终交接尚未完成。
 
 ## 开发准备
 
@@ -52,7 +52,7 @@ curl.exe -N "http://127.0.0.1:8000/api/runs/$($run.run_id)/events"
 
 HTTP 只接受 localhost、127.0.0.1 和 ::1 的 Host；浏览器写请求必须同源。没有 Origin 的本地命令行请求可用。未来前端通过 Vite 代理同源调用；当前不启用跨源访问。
 
-SSE 首帧是 `run.snapshot`，随后接收新生命周期事件和心跳；重连获取当前快照，不重放历史事件。连接断开不取消任务。当前只支持生命周期流，未接入 token 流、会话业务存储或 run 重启恢复；fixture API 也未连接已有学习业务 repository。
+SSE 首帧是 `run.snapshot`，随后接收新生命周期事件和心跳；重连获取当前快照，不重放历史事件。连接断开不取消任务。当前只支持生命周期流，未接入 token 流。fixture API 使用内存运行状态，未连接学习业务 repository；下面的 real API 持久化运行状态与 session 作用域。
 
 ## 启动真实模型 API
 
@@ -68,6 +68,8 @@ npm.cmd run dev:api:real
 macOS/Linux 对应设置 `export MODEL_API_KEY='...'` 和 `export MODEL_NAME='...'`，然后运行 `npm run dev:api:real`。`OPENAI_API_KEY` 可作为 Key 备用变量；`MODEL_BASE_URL` 未设置时使用 SDK 默认 OpenAI endpoint。`MODEL_TIMEOUT_SECONDS` 默认 30 秒，为 SDK 网络操作超时，并非整个 run 的硬截止时间；`MODEL_MAX_OUTPUT_TOKENS` 默认 4096，经 `max_tokens` 传递，给结构化图谱更多输出空间。该上限尚未经真实模型验证；更多节点或较长解释可能需要调整，截断会记录为失败。仅支持接受该参数的 Chat Completions 模型；不宣称所有兼容 endpoint 或模型均可用。
 
 real API 使用相同的提交/查询/SSE 路径，`/api/model/status` 返回 `mode: real`、`configured: true`，只表示配置已装配，不表示供应商连通或认证成功。不带目标/节点的请求使用普通回答与协议验证 `echo`；带作用域的请求装配节点上下文，注册 `get_learning_context`、`get_next_action`、`search_documents` 和 `read_document_chunk`。SDK 隐式重试关闭，应用关闭会先等待工作线程退出再关闭客户端；fixture API 仍只用于协议演示。
+
+real API 将请求输入、session 作用域、root task、结果/usage 与递增事件保存到同一 SQLite。`GET /api/sessions/{session_id}/runs` 可查询该会话的运行记录，旧 run ID 在重启后仍可查询并获取 SSE 快照。启动把遗留 queued/running 标为 interrupted，不自动重新调用模型；显式 retry 使用新 request_id 和原 retry_of_run_id，并保持原 session、作用域与输入。已完成任务不能 retry。这里持久化运行记录，不组装历史对话；同数据库只支持一个 API 进程。
 
 配置完成后可手动运行 `npm.cmd run smoke:real`（macOS/Linux 使用 `npm run smoke:real`）。它会产生真实 API 请求和费用，依次验证普通回答、原生 echo 调用及工具结果后的回答；不进入默认 CI。本次尚未执行真实供应商 smoke，离线 SDK 协议测试不能替代这项证据。
 
@@ -168,7 +170,7 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 
 图谱 GET 动态更新来源 valid/stale/unavailable；定位使用当前 planning version，当前仅持久化一份图谱快照，旧 version 返回 409。HTTP/模型不能覆盖已发布路线，后续修改需走已有离线提案用例（提案 HTTP 待接）。内部兼容方法 update_node/add_dependency 仍可把发布快照转回草稿，不能视为公开产品入口。
 
-目标、问题和图谱可从 SQLite 重启恢复，旧快照启动时补默认字段；run/root/去重仍仅在进程内。未提交失败可用新 request_id 和 retry_of_run_id 重试；取消与提交存在窄窗口，取消后先 GET 最新规划，版本改变时需重新审核并创建新任务，不能盲用旧版本重试。发布与学习初始化分属两次仓库写入，进程中断可能留下已发布但未初始化的状态；当前会拒绝节点上下文，尚无自动恢复/成绩迁移协议。
+目标、问题和图谱可从 SQLite 重启恢复，旧快照启动时补默认字段；real API 的 run/root/请求去重也可恢复。未提交失败可用新 request_id 和 retry_of_run_id 重试；取消与提交存在窄窗口，取消后先 GET 最新规划，版本改变时需重新审核并创建新任务，不能盲用旧版本重试。发布与学习初始化分属两次仓库写入，进程中断可能留下已发布但未初始化的状态；当前会拒绝节点上下文，尚无自动恢复/成绩迁移协议。
 
 ## 生成练习与作答
 
@@ -195,7 +197,22 @@ real API 的 `POST /api/goals/{goal_id}/nodes/{node_id}/lessons` 接受 `{"sessi
 
 schema_version 1 支持 markdown、quiz_choice、stepper、comparison_table，章节 ID 固定为 chapter；含章节最多20块。无绑定为 general，有绑定时实际检索片段进入上下文并保存独立 citation_map；空召回失败，最多一次 repair，保存前复验上下文、来源与题目。包不可覆盖，显式新任务生成新 ID 和递增 version；同 root task 同参数复用，异参数冲突。
 
-事件 body 示例：`{"event_id":"read-1","package_version":1,"component_id":"chapter","action":"mark_read","payload":{}}`。stepper 使用 `step_changed` 与 `{"step":0}`（从0开始）；`request_explanation` 使用空 payload，当前仅记录请求 ACK，没有解释 HTTP。重复 event_id 且包/version/组件/action 相同返回首次 payload，冲突返回409；非法动作/字段/版本返回422。过期包或旧 schema 包只读，拒绝新事件，已保存事件仍可重试。历史包从 SQLite 重启恢复，来源删除后标 unavailable；run/root 关联仍仅在进程内，重启后不能用旧 run ID 重试。React 渲染与解释任务原子关联待后续，当前不宣称 M4B 全部完成。
+事件 body 示例：`{"event_id":"read-1","package_version":1,"component_id":"chapter","action":"mark_read","payload":{}}`。stepper 使用 `step_changed` 与 `{"step":0}`（从0开始）；`request_explanation` 使用空 payload。ACK 本身不调用模型。重复 event_id 且包/version/组件/action 相同返回首次 payload，冲突返回409；非法动作/字段/版本返回422。过期包或旧 schema 包只读，拒绝新事件，已保存事件仍可重试。历史包从 SQLite 重启恢复，来源删除后标 unavailable。
+
+先 ACK 一个 request_explanation 或 step_changed 事件，再提交解释：
+
+```json
+{
+  "request_id": "explain-1",
+  "mode": "explanation",
+  "goal_id": "demo-goal",
+  "node_id": "document-loading",
+  "source_event_id": "explain-event-1",
+  "explanation_slot": "initial"
+}
+```
+
+路径为 `POST /api/sessions/{session_id}/runs`，返回202；解释不接受客户端 user_text，服务端从已保存事件、包和公共题目构造输入。首次 run、初始输入与 `(goal_id, event_id, slot)` 关联在同一 SQLite 短事务提交，模型执行在事务外。同事件/slot 用新 request_id 仍返回最近一次 attempt，跨 session 或不同输入冲突；新 slot 创建新逻辑任务。失败/取消/中断不会因换 request_id 自动执行，须显式提供 `retry_of_run_id`，保留 root 和原输入。原始 request_id 始终指向原 attempt；业务去重返回的额外 request_id 不另存别名。学习上下文过期时拒绝新解释，历史已完成结果仍可读取。React 渲染仍待后续，不宣称 M4B 全部完成。
 
 ## 常用命令
 
@@ -217,8 +234,8 @@ schema_version 1 支持 markdown、quiz_choice、stepper、comparison_table，�
 - src/learngraph_lite/agent_core/：独立 Agent 内核，包含模型协议、工具注册表、Runner 和预算控制。
 - src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入、运行摘要、公共事件和终态。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。
-- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run 路由、目标澄清/图谱规划、资料上传/绑定/检索、节点只读接口、练习生成/作答、学习包及事件 ACK 接口；HTTP 调用应用层用例。
-- src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson 的最小 SQLite repository、jieba/FTS5 BM25 检索、pypdf 子进程解析与官方 OpenAI SDK Chat Completions gateway；完整业务持久化和前端原文页仍待接入。
+- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run/会话运行列表路由、目标澄清/图谱规划、资料上传/绑定/检索、节点只读接口、练习生成/作答、学习包及事件 ACK/解释接口；HTTP 调用应用层用例。
+- src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson/run 的 SQLite repository、jieba/FTS5 BM25 检索、pypdf 子进程解析与官方 OpenAI SDK Chat Completions gateway；完整业务持久化和前端原文页仍待接入。
 
 更多边界见 docs/ARCHITECTURE.md。
 

@@ -11,10 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from learngraph_lite.agent_core import AgentRunner, ModelResponse, TextMessage, Tool, ToolCall, ToolRegistry
 from learngraph_lite.agent_core.models import ModelGateway
 from learngraph_lite.agent_core.gateway import budgeted
-from learngraph_lite.application.agent import AgentLoop, DirectResult, RunRequest
+from learngraph_lite.application.agent import AgentLoop, DirectResult, RunRepository, RunRequest
 from learngraph_lite.application.exercise_generation import GenerateExercise
 from learngraph_lite.application.lesson_generation import GenerateLesson
-from learngraph_lite.application.lessons import LessonRepository, LessonService
+from learngraph_lite.application.lessons import LessonError, LessonRepository, LessonService
 from learngraph_lite.application.documents import DocumentRepository
 from learngraph_lite.application.document_imports import DocumentImports
 from learngraph_lite.application.learning import LearningRepository, LearningService
@@ -62,7 +62,8 @@ def build_fixture_loop() -> AgentLoop:
 
 def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learning: LearningRepository,
                         documents: DocumentRepository | None = None,
-                        lessons: LessonRepository | None = None) -> AgentLoop:
+                        lessons: LessonRepository | None = None,
+                        runs: RunRepository | None = None) -> AgentLoop:
     context = LearningContext(planning, learning, documents, lessons)
     generator = GenerateExercise(learning, context.context, documents)
     planner = GeneratePlanning(PlanningService(planning), documents)
@@ -85,8 +86,18 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
     def validate(request):
         if request.mode == "lesson" and lessons is None:
             raise ValueError("Lesson generation is not configured.")
-        if request.mode in {"exercise", "lesson", "teaching"}:
-            context.context(request.goal_id, request.node_id)
+        if request.mode in {"exercise", "lesson", "teaching", "explanation"}:
+            current = context.context(request.goal_id, request.node_id)
+            if request.mode == "explanation":
+                if lessons is None:
+                    raise LessonError("lesson_not_found", "Lesson explanations are not configured.")
+                state = lessons.state(request.goal_id)
+                event = state.events.get(request.source_event_id)
+                if event is None:
+                    raise LessonError("event_not_found", "Unknown lesson event.")
+                package = state.packages[event.package_id]
+                if package.graph_content_revision != current["content_revision"]:
+                    raise LessonError("outdated_lesson", "Historical lessons cannot start a new explanation.")
         elif request.mode in {"clarify", "graph"}:
             planner.validate(request.goal_id, request.mode, request.planning_version)
 
@@ -102,8 +113,12 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
             return DirectResult(f"学习页已保存（{label}）。", result, dict(gateway.usage))
         handlers["lesson"] = generate_lesson
 
+    def prepare(request, budget, root):
+        validate(request)
+        return context.prepare(budgeted(model, budget), request, root)
+
     return AgentLoop(AgentRunner(model, build_echo_tools()), direct_handlers=handlers, validate_run=validate,
-                     prepare_run=lambda request, budget, root: context.prepare(budgeted(model, budget), request, root))
+                     prepare_run=prepare, repository=runs)
 
 
 def smoke() -> str:
@@ -142,6 +157,7 @@ def create_real_app(*, database: str | Path | None = None):
     from learngraph_lite.presentation.http import create_app
     from learngraph_lite.infrastructure import SQLiteDocumentRepository, SQLiteLearningRepository, SQLiteLessonRepository, SQLitePlanningRepository
     from learngraph_lite.infrastructure.document_parser import SubprocessDocumentParser
+    from learngraph_lite.infrastructure.run_persistence import SQLiteRunRepository
 
     gateway = build_real_gateway()
     imports = None
@@ -153,7 +169,7 @@ def create_real_app(*, database: str | Path | None = None):
         documents = SQLiteDocumentRepository(database_path)
         lessons = SQLiteLessonRepository(database_path)
         context = LearningContext(planning, learning, documents, lessons)
-        loop = build_learning_loop(gateway, planning, learning, documents, lessons)
+        loop = build_learning_loop(gateway, planning, learning, documents, lessons, SQLiteRunRepository(database_path))
         imports = DocumentImports(documents, SubprocessDocumentParser(), PlanningService(planning))
         return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close,
                           learning_context=context,

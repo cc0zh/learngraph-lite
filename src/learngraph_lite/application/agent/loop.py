@@ -8,14 +8,14 @@ from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Condition
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from learngraph_lite.agent_core import AgentRunner, Budget, TextMessage
 from learngraph_lite.agent_core.budget import BudgetExceeded
 
 
-TERMINAL_STATUSES = {"completed", "failed", "cancelled", "budget_exceeded"}
+TERMINAL_STATUSES = {"completed", "failed", "cancelled", "budget_exceeded", "interrupted"}
 
 
 class RunAdmissionError(RuntimeError):
@@ -40,6 +40,8 @@ class RunRequest:
     graph_node_count: int = 10
     lesson_purpose: str = "学习当前节点"
     lesson_exercise_ids: tuple[str, ...] = ()
+    source_event_id: str | None = None
+    explanation_slot: str | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,14 @@ class RunRecord:
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+class RunRepository(Protocol):
+    def load(self) -> tuple[tuple[RunRequest, RunRecord, tuple[RunEvent, ...]], ...]: ...
+
+    def admit(self, request: RunRequest, record: RunRecord) -> None: ...
+
+    def save(self, record: RunRecord, events: tuple[RunEvent, ...]) -> None: ...
+
+
 class AgentLoop:
     """Owns run admission, idempotency, budget injection, events and terminal state."""
 
@@ -93,11 +103,13 @@ class AgentLoop:
         *,
         prepare_run: Callable[[RunRequest, Budget, str], PreparedRun] | None = None,
         validate_run: Callable[[RunRequest], None] | None = None,
+        repository: RunRepository | None = None,
     ):
         self._runner = runner
         self._direct_handlers = direct_handlers or {}
         self._prepare_run = prepare_run
         self._validate_run = validate_run
+        self._repository = repository
         self._session_scopes: dict[str, tuple[str | None, str | None]] = {}
         self._records_by_key: dict[tuple[str, str], RunRecord] = {}
         self._requests_by_key: dict[tuple[str, str], RunRequest] = {}
@@ -107,6 +119,15 @@ class AgentLoop:
         self._condition = Condition()
         self._executor: ThreadPoolExecutor | None = None
         self._closed = False
+        self._explanation_roots: dict[tuple[str, str, str], str] = {}
+        if repository is not None:
+            for request, record, events in repository.load():
+                self._register(request, record, events)
+            with self._condition:
+                for record in self._records_by_id.values():
+                    if record.status not in TERMINAL_STATUSES:
+                        self._finish(record, "interrupted", summary="previous process stopped; retry explicitly",
+                                     error="execution interrupted by process restart")
 
     def run(self, request: RunRequest, budget: Budget | None = None) -> RunRecord:
         with self._condition:
@@ -134,14 +155,25 @@ class AgentLoop:
                 raise RunAdmissionError("invalid_scope", "planning tasks require a goal task_ref and no node")
         elif request.task_ref is not None or (request.goal_id is None) != (request.node_id is None):
             raise RunAdmissionError("invalid_scope", "goal_id and node_id must be provided together")
-        if request.mode in {"exercise", "lesson", "teaching"} and request.goal_id is None:
+        if request.mode in {"exercise", "lesson", "teaching", "explanation"} and request.goal_id is None:
             raise RunAdmissionError("invalid_scope", "this mode requires a goal and node")
+        explaining = request.source_event_id is not None and request.explanation_slot is not None
+        if (request.mode == "explanation") != explaining or ((request.source_event_id is None) != (request.explanation_slot is None)):
+            raise RunAdmissionError("invalid_scope", "explanations require an event and slot")
         key = (request.session_id, request.idempotency_key)
         existing = self._records_by_key.get(key)
         if existing is not None:
             if self._requests_by_key[key] != request:
                 raise RunAdmissionError("idempotency_conflict", "request ID was already used for different input")
             return existing, False
+        if explaining and request.retry_of_run_id is None:
+            root = self._explanation_roots.get((request.goal_id, request.source_event_id, request.explanation_slot))
+            if root is not None:
+                original = self.request(root)
+                if (original.session_id, original.node_id, original.user_text) != (request.session_id, request.node_id, request.user_text):
+                    raise RunAdmissionError("idempotency_conflict", "explanation input differs from the saved task")
+                attempts = [record for record in self._records_by_id.values() if record.root_task_id == root]
+                return max(attempts, key=lambda record: record.created_at), False
         if self._validate_run is not None:
             self._validate_run(request)
         scope = (request.goal_id, request.node_id)
@@ -154,7 +186,7 @@ class AgentLoop:
         root_task_id = ""
         if request.retry_of_run_id is not None:
             previous = self._records_by_id.get(request.retry_of_run_id)
-            if previous is None or previous.status not in {"failed", "cancelled", "budget_exceeded"}:
+            if previous is None or previous.status not in {"failed", "cancelled", "budget_exceeded", "interrupted"}:
                 raise RunAdmissionError("invalid_retry", "retry requires a failed or cancelled run")
             if previous.run_id in self._active:
                 raise RunAdmissionError("session_busy", "previous execution has not stopped")
@@ -164,16 +196,33 @@ class AgentLoop:
                        retry_of_run_id=request.retry_of_run_id) != request:
                 raise RunAdmissionError("invalid_retry", "retry must keep the original session and input")
             root_task_id = previous.root_task_id
+            if any(record.root_task_id == root_task_id and record.status == "completed"
+                   for record in self._records_by_id.values()):
+                raise RunAdmissionError("invalid_retry", "this task already has a completed run")
         record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued",
                            goal_id=request.goal_id, node_id=request.node_id, task_ref=request.task_ref)
         record.root_task_id = root_task_id or record.run_id
+        if self._repository is not None:
+            try:
+                self._repository.admit(request, record)
+            except RunAdmissionError:
+                raise
+            except Exception as exc:
+                raise RunAdmissionError("storage_unavailable", "run admission could not be persisted") from exc
+        self._register(request, record, ())
+        self._active[record.run_id] = budget
+        return record, True
+
+    def _register(self, request: RunRequest, record: RunRecord, events: tuple[RunEvent, ...]) -> None:
+        key = (request.session_id, request.idempotency_key)
+        scope = (request.goal_id, request.node_id)
         self._records_by_key[key] = record
         self._session_scopes[request.session_id] = scope
         self._requests_by_key[key] = request
         self._records_by_id[record.run_id] = record
-        self._events_by_run[record.run_id] = []
-        self._active[record.run_id] = budget
-        return record, True
+        self._events_by_run[record.run_id] = list(events)
+        if request.source_event_id is not None and record.root_task_id == record.run_id:
+            self._explanation_roots[(request.goal_id, request.source_event_id, request.explanation_slot)] = record.run_id
 
     def _execute(self, record: RunRecord, request: RunRequest) -> None:
         with self._condition:
@@ -181,20 +230,17 @@ class AgentLoop:
             if record.status in TERMINAL_STATUSES:
                 self._release(record)
                 return
-            record.status = "running"
-            record.updated_at = datetime.now(UTC)
-            self._emit(record, "run.started", {"status": record.status, "mode": request.mode})
         try:
+            with self._condition:
+                self._emit(record, "run.started", {"status": "running", "mode": request.mode}, status="running")
             budget.check_step(0)
             if request.mode in self._direct_handlers:
                 result = self._direct_handlers[request.mode](request, budget, record.root_task_id)
                 budget.check_step(0)
                 with self._condition:
                     if record.status not in TERMINAL_STATUSES:
-                        record.final_text = result.final_text
-                        record.output = deepcopy(result.output)
-                        record.usage = dict(result.usage)
-                        self._finish(record, "completed", summary="direct generation completed")
+                        self._finish(record, "completed", summary="direct generation completed",
+                                     final_text=result.final_text, output=deepcopy(result.output), usage=dict(result.usage))
                 return
 
             prepared = PreparedRun(self._runner, (TextMessage(role="user", content=request.user_text),))
@@ -208,24 +254,20 @@ class AgentLoop:
                 output = prepared.project_output(result.final_text)
             with self._condition:
                 if record.status not in TERMINAL_STATUSES:
-                    record.final_text = result.final_text
-                    record.error = "; ".join(result.errors)
-                    record.usage = dict(result.usage)
-                    record.output = deepcopy(output)
                     status = "budget_exceeded" if _is_budget_failure(result.status, result.errors) else result.status
-                    self._finish(record, status, summary=_summary_for(status, record))
+                    error = "; ".join(result.errors)
+                    self._finish(record, status, summary=_summary_for(status, replace(record, error=error)),
+                                 final_text=result.final_text, error=error, usage=dict(result.usage), output=deepcopy(output))
         except BudgetExceeded as exc:
             with self._condition:
                 if record.status not in TERMINAL_STATUSES:
-                    record.error = str(exc)
-                    record.usage = dict(budget.usage)
-                    self._finish(record, "cancelled" if budget.cancelled else "budget_exceeded", summary=str(exc))
+                    self._finish(record, "cancelled" if budget.cancelled else "budget_exceeded", summary=str(exc),
+                                 error=str(exc), usage=dict(budget.usage))
         except Exception as exc:
             with self._condition:
                 if record.status not in TERMINAL_STATUSES:
-                    record.error = str(exc)
-                    record.usage = dict(budget.usage)
-                    self._finish(record, "failed", summary="run failed before producing a result")
+                    self._finish(record, "failed", summary="run failed before producing a result",
+                                 error=str(exc), usage=dict(budget.usage))
         finally:
             with self._condition:
                 self._release(record)
@@ -238,6 +280,17 @@ class AgentLoop:
     def get_run(self, run_id: str) -> RunRecord:
         with self._condition:
             return _copy_record(self._record(run_id))
+
+    def request(self, run_id: str) -> RunRequest:
+        with self._condition:
+            self._record(run_id)
+            return next(request for key, request in self._requests_by_key.items()
+                        if self._records_by_key[key].run_id == run_id)
+
+    def list_runs(self, session_id: str) -> tuple[RunRecord, ...]:
+        with self._condition:
+            return tuple(_copy_record(record) for record in sorted(self._records_by_id.values(),
+                         key=lambda record: record.created_at) if record.session_id == session_id)
 
     def _record(self, run_id: str) -> RunRecord:
         if run_id not in self._records_by_id:
@@ -283,26 +336,42 @@ class AgentLoop:
         if executor is not None:
             executor.shutdown(wait=True)
 
-    def _finish(self, record: RunRecord, status: str, *, summary: str) -> None:
+    def _finish(self, record: RunRecord, status: str, *, summary: str, **changes) -> None:
         if record.status in TERMINAL_STATUSES:
             return
-        record.status = status
-        record.summary = summary
-        record.updated_at = datetime.now(UTC)
+        candidate = replace(record, status=status, summary=summary, **changes)
         payload: dict[str, Any] = {"status": status, "summary": summary}
-        if record.final_text:
-            payload["final_text"] = record.final_text
-        if record.error:
-            payload["error"] = record.error
-        if record.usage:
-            payload["usage"] = dict(record.usage)
-        if record.output:
-            payload["output"] = deepcopy(record.output)
-        self._emit(record, f"run.{status}", payload)
+        if candidate.final_text:
+            payload["final_text"] = candidate.final_text
+        if candidate.error:
+            payload["error"] = candidate.error
+        if candidate.usage:
+            payload["usage"] = dict(candidate.usage)
+        if candidate.output:
+            payload["output"] = deepcopy(candidate.output)
+        self._emit(record, f"run.{status}", payload, status=status, summary=summary, **changes)
 
-    def _emit(self, record: RunRecord, event_type: str, payload: dict[str, Any]) -> None:
+    def _emit(self, record: RunRecord, event_type: str, payload: dict[str, Any], **changes) -> None:
         events = self._events_by_run[record.run_id]
-        events.append(RunEvent(run_id=record.run_id, seq=len(events) + 1, type=event_type, payload=payload))
+        candidate = replace(record, updated_at=datetime.now(UTC), **changes)
+        event = RunEvent(run_id=record.run_id, seq=len(events) + 1, type=event_type, payload=payload)
+        if self._repository is not None:
+            try:
+                self._repository.save(candidate, (*events, event))
+            except Exception as exc:
+                # Keep the durable previous state for restart recovery. The live process
+                # stops admission rather than reporting an unpersisted success.
+                self._closed = True
+                record.status = "interrupted"
+                record.error = "run state could not be persisted; restart after repairing storage"
+                record.summary = "storage unavailable"
+                record.updated_at = datetime.now(UTC)
+                events.append(RunEvent(record.run_id, len(events) + 1, "run.interrupted",
+                                       {"status": record.status, "error": record.error}))
+                self._condition.notify_all()
+                raise RunAdmissionError("storage_unavailable", record.error) from exc
+        record.__dict__.update(candidate.__dict__)
+        events.append(event)
         self._condition.notify_all()
 
 
