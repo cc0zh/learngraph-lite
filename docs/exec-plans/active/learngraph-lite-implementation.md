@@ -21,7 +21,7 @@
 - [x] M3：节点 Agent 学习、单选题生成、服务端判分、进度与下一步离线闭环。
 - [x] M4A：TXT/Markdown 文档解析、分块、简单中英文检索、绑定、引用定位与空召回离线切片。
 - [x] M4B：声明式学习页、固定组件、事件 ACK、解释任务幂等离线切片。
-- [ ] M4C：图谱提案、差异审核、接受/拒绝、base_revision 冲突。
+- [x] M4C：图谱提案、差异审核、接受/拒绝、base_revision 冲突离线切片。
 - [ ] M5：全量回归、真实模型 smoke、20 例评估集与演示交接。
 - 2026-10-13：采用轻量 Python 分层骨架先完成 M0/M1 离线可验证切片；FastAPI/React/SQLite 仍按后续阶段引入，避免在模板态一次性拉入未验证依赖。
 - 2026-10-13：GitHub nanobot 页面请求在本环境未及时返回；当前只依据规格中已锁定的 nanobot commit 与 Loop/Runner 职责拆分实现，外部源码二次核验仍未完成。
@@ -29,6 +29,7 @@
 - 2026-10-13：M3 离线闭环完成节点 Agent 学习入口、单选题 Public/Private DTO、服务端判分、同题首次作答计分、重复题拒绝、旧内容版本拒绝、掌握度可升可降、按前置依赖/错题/时间预算推荐下一步；HTTP/SSE 与真实模型路径仍待后续接入。
 - 2026-10-13：M4A 离线切片完成 TXT/Markdown/PDF-text 文档模型、分块、中文/英文关键词检索、目标/节点绑定、引用定位、空召回说明和旧引用版本拒绝；真实 PDF 二进制解析、SQLite FTS5 和前端原文页仍待接入。
 - 2026-10-13：M4B 离线切片完成声明式 LessonPackage、固定组件 schema 校验、Markdown/组件可执行字段拒绝、事件 ACK 幂等、学习页事件不改成绩、正式作答复用 LearningService、解释 run 按 source_event_id/slot 幂等；前端渲染器和真实路由仍待接入。
+- 2026-10-13：M4C 离线切片完成 GraphProposal、add/update node、add/remove dependency、pending/accepted/rejected/conflicted 状态、base_revision 冲突、接受才改图、拒绝无副作用、非法操作和成环校验。
 
 ## 验收与交接
 
@@ -41,6 +42,7 @@
   - npm.cmd run ci：M3 后通过，包含 Python 边界检查、18 个 Python 测试和 19 个 Node 模板工具测试。
   - npm.cmd run ci：M4A 后通过，包含 Python 边界检查、21 个 Python 测试和 19 个 Node 模板工具测试。
   - npm.cmd run ci：M4B 后通过，包含 Python 边界检查、25 个 Python 测试和 19 个 Node 模板工具测试。
+  - npm.cmd run ci：M4C 后通过，包含 Python 边界检查、29 个 Python 测试和 19 个 Node 模板工具测试。
 - 未执行的检查、阻塞和遗留事项：
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub 源码二次读取未完成，不能声称本轮已经复核其源码细节。
