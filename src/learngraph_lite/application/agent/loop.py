@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
@@ -36,6 +37,7 @@ class RunRequest:
 class PreparedRun:
     runner: AgentRunner
     messages: tuple[TextMessage, ...]
+    project_output: Callable[[str], dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,9 @@ class RunRecord:
     error: str = ""
     summary: str = ""
     usage: dict[str, int] = field(default_factory=dict)
+    output: dict[str, Any] = field(default_factory=dict)
+    goal_id: str | None = None
+    node_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -118,7 +123,8 @@ class AgentLoop:
             raise RunAdmissionError("session_busy", "this session already has an active run")
         if len(self._active) >= 2:
             raise RunAdmissionError("capacity_exceeded", "at most two runs can execute at once")
-        record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued")
+        record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued",
+                           goal_id=request.goal_id, node_id=request.node_id)
         self._records_by_key[key] = record
         self._session_scopes[request.session_id] = scope
         self._requests_by_key[key] = request
@@ -151,11 +157,15 @@ class AgentLoop:
                     raise ValueError("node learning is not configured for this entry point")
                 prepared = self._prepare_run(request)
             result = prepared.runner.run(prepared.messages, budget=budget)
+            output = {}
+            if result.status == "completed" and prepared.project_output is not None and not budget.cancelled:
+                output = prepared.project_output(result.final_text)
             with self._condition:
                 if record.status not in TERMINAL_STATUSES:
                     record.final_text = result.final_text
                     record.error = "; ".join(result.errors)
                     record.usage = dict(result.usage)
+                    record.output = deepcopy(output)
                     status = "budget_exceeded" if _is_budget_failure(result.status, result.errors) else result.status
                     self._finish(record, status, summary=_summary_for(status, record))
         except Exception as exc:
@@ -184,7 +194,8 @@ class AgentLoop:
     def events(self, run_id: str, *, after_seq: int = 0) -> tuple[RunEvent, ...]:
         with self._condition:
             self._record(run_id)
-            return tuple(event for event in self._events_by_run[run_id] if event.seq > after_seq)
+            return tuple(replace(event, payload=deepcopy(event.payload))
+                         for event in self._events_by_run[run_id] if event.seq > after_seq)
 
     def snapshot(self, run_id: str) -> tuple[RunRecord, int]:
         """Capture state and event cursor atomically for a new SSE subscriber."""
@@ -232,6 +243,8 @@ class AgentLoop:
             payload["error"] = record.error
         if record.usage:
             payload["usage"] = dict(record.usage)
+        if record.output:
+            payload["output"] = deepcopy(record.output)
         self._emit(record, f"run.{status}", payload)
 
     def _emit(self, record: RunRecord, event_type: str, payload: dict[str, Any]) -> None:
@@ -241,7 +254,7 @@ class AgentLoop:
 
 
 def _copy_record(record: RunRecord) -> RunRecord:
-    return replace(record, usage=dict(record.usage))
+    return replace(record, usage=dict(record.usage), output=deepcopy(record.output))
 
 
 def _is_budget_failure(status: str, errors: tuple[str, ...]) -> bool:

@@ -40,13 +40,17 @@ M1 fixture smoke 使用 python -m learngraph_lite.bootstrap：bootstrap 装配 f
 
 `OpenAIChatGateway` 位于 infrastructure，使用官方 SDK 将 Chat Completions 映射到内核协议。`TextMessage` 保存 assistant 的完整 `tool_calls`，Runner 先追加 assistant 消息，再按原始 `tool_call_id` 追加对应结果；多个调用和错误参数也按相同顺序配对。`Tool.from_model` 由 Pydantic 生成 schema，执行时禁止额外字段和隐式类型转换，校验错误作为 tool 消息供模型修正；原有 dict schema 工具仍可使用。
 
-真实入口从环境变量显式创建 gateway、SQLite planning/learning repository 和 AgentLoop，缺失模型配置时启动失败。数据库默认 `.local/learngraph.sqlite3`，可由 `LEARNGRAPH_DATABASE_PATH` 指定；启动不创建演示目标或重置成绩。无作用域请求使用 echo registry；节点请求进入 `LearningContext.prepare()`，装配独立 Runner 与只读业务工具。SDK 关闭隐式重试、设置有限网络超时和 `max_tokens` 输出上限，超时/连接/HTTP 错误转换成不带供应商原始响应的失败信息；截断、空结果和不支持的调用拒绝视为成功。lifespan 先关闭 loop 并等待 worker 退出，再关闭 SDK 客户端。`scripts/run-model-smoke.py` 提供自选的普通回答与工具回合验证，当前供应商协议只有官方 SDK + MockTransport 的离线证据。
+真实入口从环境变量显式创建 gateway、SQLite planning/learning/document repository 和 AgentLoop，缺失模型配置时启动失败。数据库默认 `.local/learngraph.sqlite3`，可由 `LEARNGRAPH_DATABASE_PATH` 指定；启动不创建演示目标或重置成绩。无作用域请求使用 echo registry；节点请求进入 `LearningContext.prepare()`，装配独立 Runner 与只读业务工具。SDK 关闭隐式重试、设置有限网络超时和 `max_tokens` 输出上限，超时/连接/HTTP 错误转换成不带供应商原始响应的失败信息；截断、空结果和不支持的调用拒绝视为成功。lifespan 先关闭 loop 并等待 worker 退出，再关闭 SDK 客户端。`scripts/run-model-smoke.py` 提供自选的普通回答与工具回合验证，当前供应商协议只有官方 SDK + MockTransport 的离线证据。
 
 `LearningContext` 复用 planning repository 与 `LearningService`，要求已确认目标、已发布图谱、合法节点以及与学习状态完全一致的图谱快照。初始消息按“版本化 system 指令 → JSON 业务数据 → 当前用户输入”装配；不加载历史对话。上下文仅投影当前节点、直接前置依赖和计分后的表现，不包含练习私有答案。`get_learning_context` / `get_next_action` 闭包绑定本次目标/节点，Pydantic schema 不暴露作用域参数；推荐调用领域规则，模型不能写成绩或重定义推荐算法。每次调用检查当前发布状态与版本，过期工具错误回注模型；不自动重置或迁移成绩。
 
 HTTP 的 context/next-action 路由复用相同用例，有限的同步 SQLite 读取由 FastAPI 同步路由执行，不占用 ASGI 事件循环。当前 planning/learning repository 仍分别读取，不提供跨仓库事务或并发发布同步协议；完整图谱变更与学习状态迁移需后续实现。`scripts/run-learning-agent-demo.py` 可复现 SQLite fixture 工具回合，拒绝覆盖已有文件；可选真实模型调用仍未执行。
 
-AgentLoop 会保存 run_id、session_id、终态、摘要、usage 和递增 seq 事件。presentation 层只把这些应用层记录投影成公共 run DTO 与 SSE frame，不读取 Runner transcript，不承担业务终态写入。
+`DocumentTurn` 按本轮目标/节点注册 `search_documents` / `read_document_chunk`，复用 DocumentService 和 SQLite FTS5。检索最多返回 5 个片段，服务端分配本轮稳定 C1 等编号；读取只能使用已发出的编号。资料是数据，不是指令。完成时扫描 `[C1]` 等标记，校验绑定、文档版本、片段内容摘要值与引用位置，生成来源表、cited/status 和未验证编号；不校验回答是否被原文语义支持。旧同版本覆盖可被检测，完整资料版本管理仍待实现。
+
+AgentLoop 会保存 run_id、session_id、内部目标/节点作用域、终态、摘要、usage、场景公共 output 和递增 seq 事件。`PreparedRun.project_output` 在 Runner 完成后、终态锁外生成结果，Loop 不包含引用业务规则；取消后不发布晚到来源，投影异常走同一 failed 终态。GET/快照/事件复制嵌套结果，避免调用方污染内部来源表。presentation 层把应用记录投影成公共 run DTO 与 SSE frame，不读取 Runner transcript，不承担业务终态写入。
+
+HTTP 原文定位只接受 run_id 与本轮 citation_id，从保存的来源表和作用域调用应用用例，再次检查当前绑定、版本、内容与位置。未知编号返回 404，解绑/内容过期返回 409；GET run 中的来源状态保留完成时快照，原文点击反映当前可用性。同步 SQLite 读取在同步路由中执行；HTTP 和 SSE 保留相同来源表字段，包括无页码时的 null。
 
 HTTP 的 `submit()` 在锁内原子检查请求去重/输入冲突、session 作用域和 session/全局准入，再交给最多两个工作线程执行；不会等待模型返回。目标/节点必须成对，同 session 不能切换作用域；场景准备在工作线程中执行，失败沿用唯一终态路径。同步 `run()` 继续供离线用例使用。公开取消终态与实际调用退出分开：取消唤醒订阅者并设置预算标志，只有工作线程退出才释放名额。晚到结果不会覆盖已提交终态。
 
@@ -54,4 +58,4 @@ SSE 原子捕获运行快照与事件序号，从该序号后等待新事件；�
 
 Uvicorn 先等待 HTTP/SSE 连接结束才触发 lifespan shutdown，本地启动命令设置 2 秒 graceful shutdown，避免活跃 SSE 无限挡住生命周期关闭。其他启动器也需设置有限的连接关闭等待时间。随后 lifespan 会停止准入、取消活动 run 并等待工作线程退出；同步阻塞模型/工具必须自行设置有限超时，Python 线程无法强行打断供应商调用。
 
-此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配 planning/learning 只读场景；练习生成、资料检索和写入业务工具、完整规划/练习 HTTP 与 React 继续按总计划实施。
+此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配 planning/learning/document 只读场景；练习生成和写入业务工具、上传/PDF、完整规划/练习 HTTP 与 React 继续按总计划实施。

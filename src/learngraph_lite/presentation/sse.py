@@ -7,6 +7,7 @@ state into browser-safe dictionaries and Server-Sent Event frames.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from learngraph_lite.application.agent import RunEvent, RunRecord
@@ -27,11 +28,13 @@ def public_run(record: RunRecord) -> dict[str, Any]:
         payload["error"] = record.error
     if record.usage:
         payload["usage"] = dict(record.usage)
+    if record.output:
+        payload["output"] = deepcopy(record.output)
     return payload
 
 
 def public_run_event(event: RunEvent) -> dict[str, Any]:
-    payload = dict(event.payload)
+    payload = deepcopy(event.payload)
     return {
         "run_id": event.run_id,
         "seq": event.seq,

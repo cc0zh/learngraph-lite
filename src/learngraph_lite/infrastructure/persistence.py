@@ -184,6 +184,20 @@ class SQLiteDocumentRepository:
                 ).fetchall()
         return {row[0] for row in rows}
 
+    def unbind_from_goal(self, goal_id: str, document_id: str) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute("delete from node_document_bindings where goal_id = ? and document_id = ?",
+                                   (goal_id, document_id))
+                connection.execute("delete from goal_document_bindings where goal_id = ? and document_id = ?",
+                                   (goal_id, document_id))
+
+    def unbind_from_node(self, goal_id: str, node_id: str, document_id: str) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute("delete from node_document_bindings where goal_id = ? and node_id = ? and document_id = ?",
+                                   (goal_id, node_id, document_id))
+
     def search_chunks(self, document_ids: set[str], query_tokens: set[str], limit: int) -> tuple[ChunkSearchResult, ...]:
         if not document_ids or limit <= 0:
             return ()

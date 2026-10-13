@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunRequest, TERMINAL_STATUSES
+from learngraph_lite.application.documents import DocumentAccessError
 from learngraph_lite.application.learning_agent import LearningContext, LearningContextError
 from learngraph_lite.presentation.sse import encode_snapshot, encode_sse, public_run
 
@@ -37,6 +38,33 @@ class SubmitRun(BaseModel):
         return value
 
 
+class AnswerSource(BaseModel):
+    id: str
+    document_id: str
+    document_version: int
+    chunk_id: str
+    quote: str
+    start_offset: int
+    end_offset: int
+    page_number: int | None = None
+    text_hash: str
+    status: Literal["valid", "stale", "unavailable"]
+    cited: bool
+
+
+class AnswerSources(BaseModel):
+    citation_map: dict[str, AnswerSource]
+    unverified_citation_ids: list[str]
+
+
+class LocatedSource(BaseModel):
+    source: AnswerSource
+    text: str
+    start_offset: int
+    end_offset: int
+    page_number: int | None = None
+
+
 class PublicRun(BaseModel):
     run_id: str
     session_id: str
@@ -47,6 +75,7 @@ class PublicRun(BaseModel):
     final_text: str | None = None
     error: str | None = None
     usage: dict[str, int] | None = None
+    output: AnswerSources | None = None
 
 
 class ErrorDetail(BaseModel):
@@ -131,6 +160,10 @@ def create_app(
         status = 404 if exc.code in {"goal_not_found", "node_not_found"} else 409
         return _error(status, exc.code, str(exc))
 
+    @app.exception_handler(DocumentAccessError)
+    async def document_error(request: Request, exc: DocumentAccessError):
+        return _error(409, exc.code, str(exc))
+
     if learning_context is not None:
         @app.get("/api/goals/{goal_id}/nodes/{node_id}/context")
         def node_context(goal_id: Identifier, node_id: Identifier):
@@ -141,6 +174,21 @@ def create_app(
                         available_minutes: Annotated[int | None, Query(gt=0)] = None):
             return learning_context.next_action(goal_id, node_id, available_minutes)
 
+        @app.get("/api/runs/{run_id}/citations/{citation_id}", response_model=LocatedSource,
+                 responses={code: {"model": ErrorEnvelope} for code in (404, 409)})
+        def locate_citation(run_id: Identifier, citation_id: Identifier):
+            try:
+                record = loop.get_run(run_id)
+            except KeyError:
+                return _error(404, "run_not_found", "Run does not exist.", run_id=run_id)
+            source = record.output.get("citation_map", {}).get(citation_id)
+            if source is None or record.goal_id is None or record.node_id is None:
+                return _error(404, "source_not_found", "Citation was not returned in this run.", run_id=run_id)
+            chunk = learning_context.locate_run_source(record.goal_id, record.node_id, source)
+            return {"source": {**source, "status": "valid"}, "text": chunk["text"],
+                    "start_offset": chunk["start_offset"], "end_offset": chunk["end_offset"],
+                    "page_number": chunk["page_number"]}
+
     @app.get("/api/health")
     async def health():
         return {"status": "ok"}
@@ -150,7 +198,7 @@ def create_app(
         return {"mode": model_mode, "configured": model_configured and model_mode == "real"}
 
     @app.post("/api/sessions/{session_id}/runs", status_code=202, response_model=PublicRun,
-              response_model_exclude_none=True,
+              response_model_exclude_unset=True,
               responses={code: {"model": ErrorEnvelope} for code in (409, 429, 503)})
     async def submit_run(session_id: Identifier, body: SubmitRun):
         record = loop.submit(RunRequest(
@@ -159,7 +207,7 @@ def create_app(
         ))
         return public_run(record)
 
-    @app.get("/api/runs/{run_id}", response_model=PublicRun, response_model_exclude_none=True,
+    @app.get("/api/runs/{run_id}", response_model=PublicRun, response_model_exclude_unset=True,
              responses={404: {"model": ErrorEnvelope}})
     async def get_run(run_id: Identifier):
         try:
@@ -167,7 +215,7 @@ def create_app(
         except KeyError:
             return _error(404, "run_not_found", "Run does not exist.", run_id=run_id)
 
-    @app.post("/api/runs/{run_id}/cancel", response_model=PublicRun, response_model_exclude_none=True,
+    @app.post("/api/runs/{run_id}/cancel", response_model=PublicRun, response_model_exclude_unset=True,
               responses={404: {"model": ErrorEnvelope}})
     async def cancel_run(run_id: Identifier):
         try:

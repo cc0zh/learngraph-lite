@@ -30,12 +30,22 @@ class ChunkSearchResult:
     score: int
 
 
+class DocumentAccessError(ValueError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 class DocumentRepository(Protocol):
     def save_document(self, document: Document, chunks: tuple[DocumentChunk, ...]) -> None: ...
 
     def bind_to_goal(self, goal_id: str, document_id: str) -> None: ...
 
     def bind_to_node(self, goal_id: str, node_id: str, document_id: str) -> None: ...
+
+    def unbind_from_goal(self, goal_id: str, document_id: str) -> None: ...
+
+    def unbind_from_node(self, goal_id: str, node_id: str, document_id: str) -> None: ...
 
     def bound_document_ids(self, goal_id: str, node_id: str | None = None) -> set[str]: ...
 
@@ -70,6 +80,15 @@ class InMemoryDocumentRepository:
         if node_id is not None:
             ids &= self.node_bindings.get((goal_id, node_id), set())
         return ids
+
+    def unbind_from_goal(self, goal_id: str, document_id: str) -> None:
+        self.goal_bindings.get(goal_id, set()).discard(document_id)
+        for (bound_goal, _), documents in self.node_bindings.items():
+            if bound_goal == goal_id:
+                documents.discard(document_id)
+
+    def unbind_from_node(self, goal_id: str, node_id: str, document_id: str) -> None:
+        self.node_bindings.get((goal_id, node_id), set()).discard(document_id)
 
     def chunks_for(self, document_ids: set[str]) -> tuple[DocumentChunk, ...]:
         chunks: list[DocumentChunk] = []
@@ -119,10 +138,16 @@ class DocumentService:
     def bind_node(self, goal_id: str, node_id: str, document_id: str) -> None:
         self._repository.bind_to_node(goal_id, node_id, document_id)
 
+    def unbind_goal(self, goal_id: str, document_id: str) -> None:
+        self._repository.unbind_from_goal(goal_id, document_id)
+
+    def unbind_node(self, goal_id: str, node_id: str, document_id: str) -> None:
+        self._repository.unbind_from_node(goal_id, node_id, document_id)
+
     def search(self, goal_id: str, query: str, *, node_id: str | None = None, limit: int = 3) -> tuple[SearchHit, ...]:
         document_ids = self._repository.bound_document_ids(goal_id, node_id)
         if not document_ids:
-            raise ValueError("no documents bound to this scope")
+            raise DocumentAccessError("no_documents_bound", "no documents bound to this scope")
         query_tokens = set(tokenize(query))
         if not query_tokens:
             return ()
@@ -134,6 +159,14 @@ class DocumentService:
 
     def locate(self, citation: Citation) -> DocumentChunk:
         return self._repository.resolve_citation(citation)
+
+    def locate_bound(self, goal_id: str, node_id: str, citation: Citation) -> DocumentChunk:
+        if citation.document_id not in self._repository.bound_document_ids(goal_id, node_id):
+            raise DocumentAccessError("source_unavailable", "Source is no longer bound to this node.")
+        try:
+            return self.locate(citation)
+        except ValueError as exc:
+            raise DocumentAccessError("source_stale", "Source version or chunk is no longer available.") from exc
 
     def answer_with_citations(self, goal_id: str, node_id: str, question: str) -> tuple[str, tuple[Citation, ...]]:
         hits = self.search(goal_id, question, node_id=node_id)

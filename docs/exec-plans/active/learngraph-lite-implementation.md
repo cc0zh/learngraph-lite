@@ -83,7 +83,7 @@
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
   - React/P1 与完整业务 HTTP 尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
-  - HTTP run/事件/请求去重与 session 作用域仅在进程内存中，未实现重启恢复或 token streaming；real factory 已接 planning/learning 只读用例，完整业务 HTTP 仍待后续。同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
+  - HTTP run/事件/请求去重与 session 作用域仅在进程内存中，未实现重启恢复或 token streaming；real factory 已接 planning/learning 只读用例及绑定资料检索/引用定位，完整业务 HTTP 仍待后续。同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
   - assistant tool_calls/tool 消息配对和 Pydantic 工具参数校验已完成；真实供应商兼容性仍待 smoke 验证，见 tech-debt-tracker.md；Starlette TestClient 的 httpx 弃用提示也已记录。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析和前端原文页未实现。
   - M4B 当前已完成后端声明式包、事件用例和 SQLite 最小持久化；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
@@ -131,3 +131,15 @@
 - 验证：`npm.cmd run ci` 通过文档/仓库/Action 检查、Python import 边界、66 个 Python 测试与 19 个 Node 测试；`npm.cmd run eval:offline` 通过 20/20；`smoke:fixture`、`demo:fixture` 与 `demo:learning-agent` 全通过。既有 shutdown 测试的 graceful timeout/CancelledError 与 TestClient 弃用提示仍是已知输出；退出码为 0。
 - 测试收敛：只新增 5 个覆盖不同边界的行为测试，沿用原有 HTTP 生命周期、SDK 序列化与领域算法验证；未为相同规则再建镜像测试。旧离线评测与 demo 的生成文件无内容变化。
 - 限制：真实供应商 smoke/业务 demo 未执行。数据在分别读取的 SQLite repository 中，没有跨仓库事务或图谱迁移协议；`start_goal` 会重置学习状态，只用于首次初始化或隔离 fixture，不能作为只读上下文的自动修复。历史对话、资料/出题工具、完整规划/练习 HTTP、React 与 M5 最终交接仍待后续切片。
+
+## Agent 资料检索与回答引用切片（已完成）
+
+- 目标：节点 Agent 实际读取显式绑定资料；每轮稳定分配 C1 等引用，回答来源可从 HTTP/SSE 取得并定位原文。未知、解绑和过期来源不得成为有效引用。
+- 参考：已读取 LlamaIndex 固定 commit `5b7b6e323e1da3edd787a2104a89257c14f026d0` 的 `citation_query_engine.py` 与 MIT LICENSE；参考检索结果先编号再进入回答上下文的分工，不复制源码、不引入其框架。存在性校验不证明语义支持。
+- [x] 接入两只资料只读工具，复用 DocumentService/SQLite FTS5；严格参数、绑定范围、结果限额、run 内稳定来源表与完成时验证。
+- [x] Loop 接受场景产出的公共结果，不内嵌引用规则；HTTP/SSE 返回来源表，原文定位再次检查绑定与内容版本。
+- [x] 演示串起真实 SQLite 检索、读取、回答与空召回；新增少量行为测试覆盖多次检索、跨范围/未知引用、内容改变/解绑、并发隔离、HTTP/SSE。
+- [x] 执行 CI、离线评估和 demo；同步文档/history/learning 并提交。
+- 验证：`npm.cmd run ci` 通过（72 Python + 19 Node）；`eval:offline` 通过 20/20；`demo:learning-agent`、`demo:fixture`、`smoke:fixture` 通过；`git diff --check` 通过。真实供应商 smoke/demo 未运行。
+- 修复与收敛：首次 Python 回归发现 HTTP 递归删去来源中的 `page_number:null`，与 SSE 不一致；改用 exclude_unset 后 72 项全通过。只新增 6 个聚合行为测试，覆盖检索/参数修复/稳定来源、无资料/空召回、变更/解绑、并发、HTTP/SSE/定位、结果投影取消/异常/预算，复用既有生命周期与 SDK 测试。
+- 范围边界：本切片不完成 PDF/上传解析、jieba/BM25 升级、图谱/出题/学习页 grounding、React 或真实供应商评测；总体计划保持 active。

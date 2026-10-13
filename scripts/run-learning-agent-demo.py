@@ -15,25 +15,34 @@ if str(ROOT / "src") not in sys.path:
 
 from learngraph_lite.agent_core import ModelResponse, ToolCall
 from learngraph_lite.application.agent import RunRequest
+from learngraph_lite.application.documents import DocumentService
 from learngraph_lite.application.learning import LearningService
 from learngraph_lite.application.planning import PlanningService, candidate_rag_graph
 from learngraph_lite.bootstrap import build_learning_loop, build_real_gateway
-from learngraph_lite.infrastructure import SQLiteLearningRepository, SQLitePlanningRepository
+from learngraph_lite.infrastructure import SQLiteDocumentRepository, SQLiteLearningRepository, SQLitePlanningRepository
 
 
 class LearningFixtureModel:
     def complete(self, messages, tools):
         results = [json.loads(message.content) for message in messages if message.role == "tool"]
         if not results:
+            query = "zzzz-no-match" if "空召回" in messages[2].content else "清洗"
             return ModelResponse(tool_calls=(
                 ToolCall("context-1", "get_learning_context", "{}"),
                 ToolCall("next-1", "get_next_action", '{"available_minutes":10}'),
+                ToolCall("search-1", "search_documents", json.dumps({"query": query})),
             ))
-        context, action = results
+        if len(results) == 3:
+            if results[2]["empty"]:
+                return ModelResponse(content="fixture：已绑定资料中没有找到依据，资料不足；非基于上传资料的解释应单独标注。")
+            citation_id = results[2]["sources"][0]["id"]
+            return ModelResponse(tool_calls=(ToolCall("read-1", "read_document_chunk", json.dumps({"citation_id": citation_id})),))
+        context, action = results[:2]
         return ModelResponse(content=(
             f"fixture：{context['goal']['title']}；当前节点 {context['node']['title']}，"
             f"掌握度 {context['node']['mastery']}，有效样本 {context['node']['sample_count']}。"
             f"下一步 {action['action_type']}:{action['node_id']}；{action['reason_text']}"
+            f"资料原文：{results[3]['text']} [{results[3]['id']}]"
         ))
 
 
@@ -44,6 +53,7 @@ def run_demo(database: Path, *, real: bool = False) -> dict:
         pass
     planning_repository = SQLitePlanningRepository(database)
     learning_repository = SQLiteLearningRepository(database)
+    document_repository = SQLiteDocumentRepository(database)
     planning = PlanningService(planning_repository)
     planning.create_goal("demo-goal", "四周做出带引用的 RAG 应用", desired_outcome="可演示的 RAG demo",
                          current_level="Python 基础", time_budget_minutes=1200)
@@ -57,16 +67,29 @@ def run_demo(database: Path, *, real: bool = False) -> dict:
         learning.create_fixture_exercise("demo-goal", "rag-goal", f"e{index}", f"演示引用题 {index}")
         learning.submit_answer("demo-goal", f"e{index}", "b", f"a{index}")
 
+    documents = DocumentService(document_repository)
+    documents.upload_text("demo-notes", "资料清洗笔记", "资料清洗先统一换行、去除空白，再分块并保存原文位置用于引用定位。")
+    documents.bind_goal("demo-goal", "demo-notes")
+    documents.bind_node("demo-goal", "document-loading", "demo-notes")
+
     model = build_real_gateway() if real else LearningFixtureModel()
-    loop = build_learning_loop(model, planning_repository, learning_repository)
+    loop = build_learning_loop(model, planning_repository, learning_repository, document_repository)
     try:
-        record = loop.run(RunRequest("demo-session", "解释当前节点，并告诉我十分钟内下一步做什么。", "demo-1",
+        record = loop.run(RunRequest("demo-session", "依据绑定资料解释清洗和引用定位，并告诉我十分钟内下一步做什么。", "demo-1",
                                      goal_id="demo-goal", node_id="document-loading"))
         if record.status != "completed":
             raise RuntimeError(record.error or record.status)
+        empty = None
+        if not real:
+            empty_record = loop.run(RunRequest("empty-session", "演示空召回", "empty-1",
+                                              goal_id="demo-goal", node_id="document-loading"))
+            if empty_record.status != "completed":
+                raise RuntimeError(empty_record.error or empty_record.status)
+            empty = {"final_text": empty_record.final_text, "output": empty_record.output}
         return {"mode": "real" if real else "fixture", "data": "fixture-seeded SQLite",
                 "goal_id": "demo-goal", "node_id": "document-loading", "status": record.status,
-                "final_text": record.final_text, "usage": record.usage}
+                "final_text": record.final_text, "usage": record.usage, "output": record.output,
+                "empty_retrieval": empty}
     finally:
         loop.close()
         if real:

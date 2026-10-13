@@ -40,9 +40,10 @@ def setup_goal(database: Path, goal_id: str = "g1", *, start_learning: bool = Tr
 
 
 class ReadingModel:
-    def __init__(self, *, barrier=None, repair_scope=False):
+    def __init__(self, *, barrier=None, repair_scope=False, with_documents=False):
         self.barrier = barrier
         self.repair_scope = repair_scope
+        self.with_documents = with_documents
         self.closed = False
         self.transcripts = []
 
@@ -51,7 +52,10 @@ class ReadingModel:
 
     def complete(self, messages, tools):
         names = {tool["function"]["name"] for tool in tools}
-        assert names == {"get_learning_context", "get_next_action"}
+        expected = {"get_learning_context", "get_next_action"}
+        if self.with_documents:
+            expected |= {"search_documents", "read_document_chunk"}
+        assert names == expected
         for tool in tools:
             schema = tool["function"]["parameters"]
             assert schema["additionalProperties"] is False
@@ -193,7 +197,7 @@ def test_real_http_factory_shares_learning_reads_and_maps_scope_errors():
         database = Path(directory) / "test.sqlite3"
         planning, learning = setup_goal(database)
         context = LearningContext(planning, learning)
-        model = ReadingModel()
+        model = ReadingModel(with_documents=True)
         with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=model):
             app = create_real_app(database=database)
         with TestClient(app, base_url="http://localhost") as api:
@@ -227,6 +231,10 @@ def test_learning_agent_demo_refuses_existing_database():
         result = module.run_demo(database)
         assert result["mode"] == "fixture" and result["status"] == "completed"
         assert "short_explanation:document-loading" in result["final_text"]
+        assert result["output"]["citation_map"]["C1"]["cited"] is True
+        assert result["output"]["unverified_citation_ids"] == []
+        assert result["empty_retrieval"]["output"]["citation_map"] == {}
+        assert "资料不足" in result["empty_retrieval"]["final_text"]
         before = database.read_bytes()
         try:
             module.run_demo(database)
