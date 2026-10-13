@@ -1,0 +1,41 @@
+# mini-learngraph4
+
+LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
+
+当前仓库处于 M0/M1 起步阶段：已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、少量纯领域规则、fixture smoke 和离线测试。FastAPI、React、SQLite、资料检索、学习页和 P1 闭环仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
+
+## 开发准备
+
+需要 Node.js 22+、Python 3.13+、Git；完整打包还需要 tar。当前离线检查不需要安装 npm 或 Python 第三方依赖。
+
+Windows 常用入口：
+
+- npm.cmd run ci
+- npm.cmd run smoke:fixture
+
+macOS/Linux 使用 npm。Windows 环境问题见 docs/WINDOWS.md。
+
+## 常用命令
+
+- npm.cmd run ci
+- npm.cmd run test
+- npm.cmd run test:py
+- npm.cmd run check:py-boundaries
+- npm.cmd run smoke:fixture
+- npm.cmd run release-package
+
+## 当前架构
+
+- src/learngraph_lite/agent_core/：独立 Agent 内核，包含模型协议、工具注册表、Runner 和预算控制。
+- src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入和终态。
+- src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。
+- src/learngraph_lite/infrastructure/ 与 src/learngraph_lite/presentation/：后续放适配器和 HTTP/UI 入口。
+
+更多边界见 docs/ARCHITECTURE.md。
+
+## 项目约定
+
+- 从 AGENTS.md 查阅协作规则；docs/ 是仓库知识正式来源。
+- 阶段计划维护在 docs/exec-plans/active/learngraph-lite-implementation.md。
+- 开源复用记录维护在 docs/references/open-source-reuse.md。
+- 未配置真实模型 Key 时只能使用明确标记的 fixture 模式，不能把 fixture 结果当成真实模型能力。
