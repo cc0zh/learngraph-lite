@@ -18,7 +18,7 @@
 - [x] M1：新增轻量 import 边界检查并接入 CI。
 - [ ] M1：补 HTTP/SSE 最小生命周期、运行摘要与取消状态的真实路由测试；已完成无依赖公共生命周期与 SSE 投影离线切片，FastAPI 真实路由仍待接入。
 - [x] M2：目标澄清、确认、图谱草稿/编辑/发布、revision、规划离线 E2E 与 planning state 最小 SQLite 持久化。
-- [x] M3：节点 Agent 学习、单选题生成、服务端判分、进度与下一步离线闭环。
+- [x] M3：节点 Agent 学习、单选题生成、服务端判分、进度、下一步离线闭环与 learning state 最小 SQLite 持久化。
 - [x] M4A：TXT/Markdown 文档解析、分块、简单中英文检索、绑定、引用定位、空召回离线切片与 SQLite FTS5 最小适配器。
 - [x] M4B：声明式学习页、固定组件、事件 ACK、解释任务幂等离线切片。
 - [x] M4C：图谱提案、差异审核、接受/拒绝、base_revision 冲突离线切片。
@@ -35,6 +35,7 @@
 - 2026-10-13：M5 fixture demo 切片新增 scripts/run-fixture-demo.py 和 docs/demo/fixture-demo.md，串起目标确认、图谱发布、资料引用、空召回、节点学习、练习掌握、下一步、声明式学习页与图谱提案；输出明确标记为 deterministic fixture demo。
 - 2026-10-13：SQLite planning persistence 最小切片完成 `SQLitePlanningRepository`，用标准库 sqlite3 持久化目标草稿、澄清轮次和当前图谱快照，验证重新实例化 repository 后可恢复已确认目标与已发布图谱；完整业务 SQLite schema、迁移、练习/资料/事件持久化仍待后续接入。
 - 2026-10-13：SQLite document retrieval 最小切片完成 `SQLiteDocumentRepository`，持久化文本资料、chunk、目标/节点绑定和引用定位，并用 FTS5 索引现有 `tokenize()` 结果支持中英文检索；真实 PDF 二进制解析、前端原文页、完整业务持久化仍待后续接入。
+- 2026-10-13：SQLite learning persistence 最小切片完成 `SQLiteLearningRepository`，持久化学习图谱、私有练习、作答和节点学习请求幂等结果，验证重新实例化 repository 后可恢复掌握度、下一步推荐和同题重答计分规则；学习页事件、运行生命周期和完整业务 schema 仍待后续接入。
 
 ## 验收与交接
 
@@ -63,10 +64,14 @@
   - python scripts/check-python-boundaries.py：SQLite document retrieval 切片通过，输出 Python import boundaries passed。
   - npm.cmd run check:docs：SQLite document retrieval 切片通过，输出文档骨架检查通过。
   - npm.cmd run ci：SQLite document retrieval 切片通过，包含 Python 边界检查、41 个 Python 测试和 19 个 Node 模板工具测试。
+  - python scripts/run-python-tests.py：SQLite learning persistence 切片通过，45 Python tests passed。
+  - python scripts/check-python-boundaries.py：SQLite learning persistence 切片通过，输出 Python import boundaries passed。
+  - npm.cmd run check:docs：SQLite learning persistence 切片通过，输出文档骨架检查通过。
+  - npm.cmd run ci：SQLite learning persistence 切片通过，包含 Python 边界检查、45 个 Python 测试和 19 个 Node 模板工具测试。
 - 未执行的检查、阻塞和遗留事项：
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
-  - FastAPI/React/P1 功能尚未实现；SQLite 目前只覆盖 planning state 与 document retrieval 的最小 repository，不代表完整业务持久化。
+  - FastAPI/React/P1 功能尚未实现；SQLite 目前只覆盖 planning state、document retrieval 与 learning state 的最小 repository，不代表完整业务持久化。
   - M1 真实 HTTP/SSE 路由测试未执行；当前只验证应用层生命周期与 presentation SSE 编码，不声称已完成 FastAPI 路由。
   - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析和前端原文页未实现。
   - M4B 当前只有后端声明式包与事件用例；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。

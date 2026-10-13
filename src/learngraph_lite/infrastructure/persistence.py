@@ -6,12 +6,14 @@ from contextlib import closing
 import json
 import sqlite3
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 from learngraph_lite.application.documents import ChunkSearchResult
+from learngraph_lite.application.learning import LearningState
 from learngraph_lite.application.planning import PlanningState
 from learngraph_lite.domain.documents import Citation, Document, DocumentChunk, tokenize
-from learngraph_lite.domain.learning import GoalDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus
+from learngraph_lite.domain.learning import Attempt, ExerciseOption, ExercisePrivate, GoalDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus
 
 
 class SQLitePlanningRepository:
@@ -312,6 +314,209 @@ class SQLiteDocumentRepository:
         return row is not None
 
 
+class SQLiteLearningRepository:
+    """Persist learning graph, private exercises and attempts with SQLite."""
+
+    def __init__(self, database_path: str | Path):
+        self._database_path = str(database_path)
+        self._initialize()
+
+    def save(self, goal_id: str, state: LearningState) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    insert into learning_states(goal_id, graph_json, run_ids_json)
+                    values (?, ?, ?)
+                    on conflict(goal_id) do update set
+                        graph_json = excluded.graph_json,
+                        run_ids_json = excluded.run_ids_json
+                    """,
+                    (
+                        goal_id,
+                        json.dumps(_graph_to_json(state.graph), ensure_ascii=False, sort_keys=True),
+                        json.dumps(
+                            {
+                                "run_ids_by_key": state.run_ids_by_key,
+                                "final_text_by_key": state.final_text_by_key,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                    ),
+                )
+                connection.execute("delete from learning_exercises where goal_id = ?", (goal_id,))
+                connection.executemany(
+                    """
+                    insert into learning_exercises(
+                        goal_id,
+                        exercise_id,
+                        node_id,
+                        graph_content_revision,
+                        prompt,
+                        options_json,
+                        correct_option_id,
+                        explanation,
+                        normalized_hash
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            goal_id,
+                            exercise.id,
+                            exercise.node_id,
+                            exercise.graph_content_revision,
+                            exercise.prompt,
+                            json.dumps([asdict(option) for option in exercise.options], ensure_ascii=False, sort_keys=True),
+                            exercise.correct_option_id,
+                            exercise.explanation,
+                            exercise.normalized_hash,
+                        )
+                        for exercise in state.exercises.values()
+                    ),
+                )
+                connection.execute("delete from learning_attempts where goal_id = ?", (goal_id,))
+                connection.executemany(
+                    """
+                    insert into learning_attempts(
+                        goal_id,
+                        attempt_id,
+                        exercise_id,
+                        node_id,
+                        selected_option_id,
+                        is_correct,
+                        counted,
+                        created_at
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        (
+                            goal_id,
+                            attempt.id,
+                            attempt.exercise_id,
+                            attempt.node_id,
+                            attempt.selected_option_id,
+                            1 if attempt.is_correct else 0,
+                            1 if attempt.counted else 0,
+                            attempt.created_at.isoformat(),
+                        )
+                        for attempt in state.attempts
+                    ),
+                )
+
+    def get(self, goal_id: str) -> LearningState:
+        with closing(self._connect()) as connection:
+            state_row = connection.execute(
+                "select graph_json, run_ids_json from learning_states where goal_id = ?",
+                (goal_id,),
+            ).fetchone()
+            if state_row is None:
+                raise KeyError(f"unknown learning goal: {goal_id}")
+            exercise_rows = connection.execute(
+                """
+                select exercise_id, node_id, graph_content_revision, prompt, options_json,
+                    correct_option_id, explanation, normalized_hash
+                from learning_exercises
+                where goal_id = ?
+                order by exercise_id
+                """,
+                (goal_id,),
+            ).fetchall()
+            attempt_rows = connection.execute(
+                """
+                select attempt_id, exercise_id, node_id, selected_option_id, is_correct, counted, created_at
+                from learning_attempts
+                where goal_id = ?
+                order by rowid
+                """,
+                (goal_id,),
+            ).fetchall()
+        exercises = {
+            row[0]: ExercisePrivate(
+                id=row[0],
+                goal_id=goal_id,
+                node_id=row[1],
+                graph_content_revision=int(row[2]),
+                prompt=row[3],
+                options=tuple(ExerciseOption(**option) for option in json.loads(row[4])),
+                correct_option_id=row[5],
+                explanation=row[6],
+                normalized_hash=row[7],
+            )
+            for row in exercise_rows
+        }
+        attempts = [
+            Attempt(
+                id=row[0],
+                exercise_id=row[1],
+                goal_id=goal_id,
+                node_id=row[2],
+                selected_option_id=row[3],
+                is_correct=bool(row[4]),
+                counted=bool(row[5]),
+                created_at=datetime.fromisoformat(row[6]),
+            )
+            for row in attempt_rows
+        ]
+        run_ids_by_key, final_text_by_key = _learning_run_maps(state_row[1])
+        return LearningState(
+            graph=_graph_from_json(json.loads(state_row[0])),
+            exercises=exercises,
+            attempts=attempts,
+            run_ids_by_key=run_ids_by_key,
+            final_text_by_key=final_text_by_key,
+        )
+
+    def _initialize(self) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    create table if not exists learning_states (
+                        goal_id text primary key,
+                        graph_json text not null,
+                        run_ids_json text not null
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    create table if not exists learning_exercises (
+                        goal_id text not null,
+                        exercise_id text not null,
+                        node_id text not null,
+                        graph_content_revision integer not null,
+                        prompt text not null,
+                        options_json text not null,
+                        correct_option_id text not null,
+                        explanation text not null,
+                        normalized_hash text not null,
+                        primary key(goal_id, exercise_id)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    create table if not exists learning_attempts (
+                        goal_id text not null,
+                        attempt_id text not null,
+                        exercise_id text not null,
+                        node_id text not null,
+                        selected_option_id text not null,
+                        is_correct integer not null,
+                        counted integer not null,
+                        created_at text not null,
+                        primary key(goal_id, attempt_id)
+                    )
+                    """
+                )
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._database_path)
+
+
 def _goal_to_json(goal: GoalDraft) -> dict:
     data = asdict(goal)
     data["document_ids"] = list(goal.document_ids)
@@ -372,3 +577,10 @@ def _chunk_from_row(row: sqlite3.Row | tuple) -> DocumentChunk:
 def _fts_match_query(query_tokens: set[str]) -> str:
     tokens = sorted(token for token in query_tokens if token)
     return " OR ".join(f'"{token}"' for token in tokens)
+
+
+def _learning_run_maps(data: str) -> tuple[dict[str, str], dict[str, str]]:
+    payload = json.loads(data)
+    if "run_ids_by_key" in payload:
+        return dict(payload["run_ids_by_key"]), dict(payload.get("final_text_by_key", {}))
+    return dict(payload), {}

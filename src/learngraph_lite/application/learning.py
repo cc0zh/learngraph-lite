@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from learngraph_lite.application.agent import AgentLoop, RunRequest
 from learngraph_lite.domain.learning import GraphSnapshot, MasteryState
@@ -24,6 +25,13 @@ class LearningState:
     exercises: dict[str, ExercisePrivate] = field(default_factory=dict)
     attempts: list[Attempt] = field(default_factory=list)
     run_ids_by_key: dict[str, str] = field(default_factory=dict)
+    final_text_by_key: dict[str, str] = field(default_factory=dict)
+
+
+class LearningRepository(Protocol):
+    def save(self, goal_id: str, state: LearningState) -> None: ...
+
+    def get(self, goal_id: str) -> LearningState: ...
 
 
 @dataclass
@@ -41,7 +49,7 @@ class InMemoryLearningRepository:
 
 
 class LearningService:
-    def __init__(self, repository: InMemoryLearningRepository, loop: AgentLoop):
+    def __init__(self, repository: LearningRepository, loop: AgentLoop):
         self._repository = repository
         self._loop = loop
 
@@ -51,6 +59,9 @@ class LearningService:
     def learn_node(self, goal_id: str, node_id: str, user_text: str, request_id: str) -> str:
         state = self._repository.get(goal_id)
         _require_node(state.graph, node_id)
+        existing = state.final_text_by_key.get(request_id)
+        if existing is not None:
+            return existing
         record = self._loop.run(
             RunRequest(
                 session_id=f"{goal_id}:{node_id}",
@@ -59,6 +70,9 @@ class LearningService:
             )
         )
         state.run_ids_by_key.setdefault(request_id, record.run_id)
+        if record.status == "completed":
+            state.final_text_by_key.setdefault(request_id, record.final_text)
+        self._repository.save(goal_id, state)
         return record.final_text
 
     def create_fixture_exercise(self, goal_id: str, node_id: str, exercise_id: str, prompt: str) -> ExercisePublic:
@@ -81,6 +95,7 @@ class LearningService:
         if any(existing.normalized_hash == exercise.normalized_hash and existing.node_id == node_id for existing in state.exercises.values()):
             raise ValueError("duplicate exercise for current node revision")
         state.exercises[exercise.id] = exercise
+        self._repository.save(goal_id, state)
         return exercise.to_public()
 
     def submit_answer(self, goal_id: str, exercise_id: str, selected_option_id: str, attempt_id: str) -> Attempt:
@@ -96,6 +111,7 @@ class LearningService:
             previous_attempts_for_exercise=previous,
         )
         state.attempts.append(attempt)
+        self._repository.save(goal_id, state)
         return attempt
 
     def mastery(self, goal_id: str, node_id: str) -> tuple[MasteryState, int, float]:
