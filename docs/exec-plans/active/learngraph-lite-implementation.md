@@ -18,7 +18,7 @@
 - [x] M1：新增轻量 import 边界检查并接入 CI。
 - [ ] M1：补 HTTP/SSE 最小生命周期、运行摘要与取消状态的真实路由测试。
 - [x] M2：目标澄清、确认、图谱草稿/编辑/发布、revision 与规划离线 E2E。
-- [ ] M3：节点 Agent 学习、单选题生成、服务端判分、进度与下一步，完成 P0 E2E。
+- [x] M3：节点 Agent 学习、单选题生成、服务端判分、进度与下一步离线闭环。
 - [ ] M4A：文档上传/解析/FTS 检索/引用定位/资料 grounding。
 - [ ] M4B：声明式学习页、固定组件、事件 ACK、解释任务幂等。
 - [ ] M4C：图谱提案、差异审核、接受/拒绝、base_revision 冲突。
@@ -26,6 +26,7 @@
 - 2026-10-13：采用轻量 Python 分层骨架先完成 M0/M1 离线可验证切片；FastAPI/React/SQLite 仍按后续阶段引入，避免在模板态一次性拉入未验证依赖。
 - 2026-10-13：GitHub nanobot 页面请求在本环境未及时返回；当前只依据规格中已锁定的 nanobot commit 与 Loop/Runner 职责拆分实现，外部源码二次核验仍未完成。
 - 2026-10-13：M2 离线切片完成目标草稿、最多两轮澄清、目标确认、8 节点候选图谱、草稿编辑、发布校验、revision 冲突与刷新恢复所需的内存仓库；HTTP/SQLite/前端 E2E 待后续阶段接入。
+- 2026-10-13：M3 离线闭环完成节点 Agent 学习入口、单选题 Public/Private DTO、服务端判分、同题首次作答计分、重复题拒绝、旧内容版本拒绝、掌握度可升可降、按前置依赖/错题/时间预算推荐下一步；HTTP/SSE 与真实模型路径仍待后续接入。
 
 ## 验收与交接
 
@@ -35,6 +36,7 @@
   - python -X utf8 scripts/run-fixture-smoke.py：通过，输出“工具结果已收到，继续学习下一步。”
   - npm.cmd run ci：M0/M1 通过，包含 Python 边界检查、9 个 Python 测试和 19 个 Node 模板工具测试。
   - npm.cmd run ci：M2 后通过，包含 Python 边界检查、13 个 Python 测试和 19 个 Node 模板工具测试。
+  - npm.cmd run ci：M3 后通过，包含 Python 边界检查、18 个 Python 测试和 19 个 Node 模板工具测试。
 - 未执行的检查、阻塞和遗留事项：
   - 真实模型 smoke 未执行，当前没有配置供应商 Key。
   - nanobot GitHub 源码二次读取未完成，不能声称本轮已经复核其源码细节。
