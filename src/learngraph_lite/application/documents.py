@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from learngraph_lite.domain.documents import (
     Citation,
@@ -21,6 +22,26 @@ class SearchHit:
     chunk: DocumentChunk
     score: int
     citation: Citation
+
+
+@dataclass(frozen=True)
+class ChunkSearchResult:
+    chunk: DocumentChunk
+    score: int
+
+
+class DocumentRepository(Protocol):
+    def save_document(self, document: Document, chunks: tuple[DocumentChunk, ...]) -> None: ...
+
+    def bind_to_goal(self, goal_id: str, document_id: str) -> None: ...
+
+    def bind_to_node(self, goal_id: str, node_id: str, document_id: str) -> None: ...
+
+    def bound_document_ids(self, goal_id: str, node_id: str | None = None) -> set[str]: ...
+
+    def search_chunks(self, document_ids: set[str], query_tokens: set[str], limit: int) -> tuple[ChunkSearchResult, ...]: ...
+
+    def resolve_citation(self, citation: Citation) -> DocumentChunk: ...
 
 
 @dataclass
@@ -56,6 +77,17 @@ class InMemoryDocumentRepository:
             chunks.extend(self.chunks_by_document.get(document_id, ()))
         return tuple(chunks)
 
+    def search_chunks(self, document_ids: set[str], query_tokens: set[str], limit: int) -> tuple[ChunkSearchResult, ...]:
+        results: list[ChunkSearchResult] = []
+        for chunk in self.chunks_for(document_ids):
+            chunk_tokens = tokenize(chunk.text)
+            chunk_text = chunk.text.casefold()
+            score = sum(1 for token in query_tokens if token in chunk_tokens or token in chunk_text)
+            if score > 0:
+                results.append(ChunkSearchResult(chunk=chunk, score=score))
+        results.sort(key=lambda result: (-result.score, result.chunk.document_id, result.chunk.index))
+        return tuple(results[:limit])
+
     def resolve_citation(self, citation: Citation) -> DocumentChunk:
         document = self.documents.get(citation.document_id)
         if document is None:
@@ -73,7 +105,7 @@ class InMemoryDocumentRepository:
 
 
 class DocumentService:
-    def __init__(self, repository: InMemoryDocumentRepository):
+    def __init__(self, repository: DocumentRepository):
         self._repository = repository
 
     def upload_text(self, document_id: str, title: str, content: str, *, kind: DocumentKind = DocumentKind.TEXT) -> Document:
@@ -94,15 +126,11 @@ class DocumentService:
         query_tokens = set(tokenize(query))
         if not query_tokens:
             return ()
-        hits: list[SearchHit] = []
-        for chunk in self._repository.chunks_for(document_ids):
-            chunk_tokens = tokenize(chunk.text)
-            chunk_text = chunk.text.casefold()
-            score = sum(1 for token in query_tokens if token in chunk_tokens or token in chunk_text)
-            if score > 0:
-                hits.append(SearchHit(chunk=chunk, score=score, citation=make_citation(f"src-{len(hits) + 1}", chunk)))
-        hits.sort(key=lambda hit: (-hit.score, hit.chunk.document_id, hit.chunk.index))
-        return tuple(hits[:limit])
+        results = self._repository.search_chunks(document_ids, query_tokens, limit)
+        return tuple(
+            SearchHit(chunk=result.chunk, score=result.score, citation=make_citation(f"src-{index + 1}", result.chunk))
+            for index, result in enumerate(results)
+        )
 
     def locate(self, citation: Citation) -> DocumentChunk:
         return self._repository.resolve_citation(citation)
