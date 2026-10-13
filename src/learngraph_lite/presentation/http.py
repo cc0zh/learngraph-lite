@@ -9,13 +9,14 @@ from datetime import datetime
 from typing import Annotated, Callable, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunRequest, TERMINAL_STATUSES
 from learngraph_lite.application.documents import DocumentAccessError
+from learngraph_lite.application.document_imports import DocumentImports, MAX_UPLOAD_BYTES
 from learngraph_lite.application.exercise_generation import ExerciseError, GenerateExercise
 from learngraph_lite.application.learning_agent import LearningContext, LearningContextError
 from learngraph_lite.application.planning import PlanningError, PlanningService
@@ -54,6 +55,7 @@ class AnswerSource(BaseModel):
     start_offset: int
     end_offset: int
     page_number: int | None = None
+    heading: str | None = None
     text_hash: str
     status: Literal["valid", "stale", "unavailable"]
     cited: bool
@@ -157,12 +159,37 @@ class SubmitAnswer(BaseModel):
     selected_option_id: Identifier
 
 
+class PublicDocument(BaseModel):
+    document_id: str
+    filename: str
+    kind: Literal["text", "markdown", "pdf_text"] | None
+    status: Literal["uploaded", "parsing", "ready", "failed", "unsupported"]
+    size_bytes: int
+    content_hash: str
+    revision: int
+    reason: str | None
+
+
+class DocumentBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    document_id: Identifier
+    node_id: Identifier | None = None
+
+
+class DocumentSearch(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    query: str = Field(min_length=1, max_length=500)
+    node_id: Identifier | None = None
+    limit: int = Field(default=5, ge=1, le=5)
+
+
 class LocatedSource(BaseModel):
     source: AnswerSource
     text: str
     start_offset: int
     end_offset: int
     page_number: int | None = None
+    heading: str | None = None
 
 
 class PublicRun(BaseModel):
@@ -208,6 +235,7 @@ def create_app(
     exercises: GenerateExercise | None = None,
     planning: PlanningService | None = None,
     on_publish: Callable[[GraphSnapshot], None] | None = None,
+    document_imports: DocumentImports | None = None,
 ) -> FastAPI:
     """Create a process-local API, with cooperative shutdown and snapshot-first SSE."""
     if not math.isfinite(heartbeat_seconds) or heartbeat_seconds <= 0:
@@ -223,8 +251,12 @@ def create_app(
             try:
                 await asyncio.to_thread(loop.close)
             finally:
-                if on_close is not None:
-                    await asyncio.to_thread(on_close)
+                try:
+                    if document_imports is not None:
+                        await asyncio.to_thread(document_imports.close)
+                finally:
+                    if on_close is not None:
+                        await asyncio.to_thread(on_close)
 
     app = FastAPI(
         title="LearnGraph Lite", version="0.1.0", lifespan=lifespan,
@@ -266,7 +298,10 @@ def create_app(
 
     @app.exception_handler(DocumentAccessError)
     async def document_error(request: Request, exc: DocumentAccessError):
-        return _error(409, exc.code, str(exc))
+        statuses = {"document_not_found": 404, "node_not_found": 404, "upload_too_large": 413,
+                    "invalid_document_request": 422, "document_capacity_exceeded": 429, "shutting_down": 503}
+        return _error(statuses.get(exc.code, 409), exc.code, str(exc),
+                      retryable=exc.code in {"document_capacity_exceeded", "shutting_down"})
 
     @app.exception_handler(ExerciseError)
     async def exercise_error(request: Request, exc: ExerciseError):
@@ -283,6 +318,45 @@ def create_app(
     @app.exception_handler(GraphValidationError)
     async def graph_error(request: Request, exc: GraphValidationError):
         return _error(422, "invalid_graph", str(exc))
+
+    if document_imports is not None:
+        @app.post("/api/documents", status_code=202, response_model=PublicDocument)
+        async def upload_document(file: Annotated[UploadFile, File()]):
+            try:
+                original = await file.read(MAX_UPLOAD_BYTES + 1)
+                return await asyncio.to_thread(document_imports.upload, file.filename or "upload", original)
+            finally:
+                await file.close()
+
+        @app.get("/api/documents/{document_id}", response_model=PublicDocument)
+        def get_document(document_id: Identifier):
+            return document_imports.get(document_id)
+
+        @app.get("/api/documents/{document_id}/chunks")
+        def get_chunks(document_id: Identifier, offset: Annotated[int, Query(ge=0)] = 0,
+                       limit: Annotated[int, Query(ge=1, le=50)] = 50):
+            return document_imports.chunks(document_id, offset=offset, limit=limit)
+
+        @app.post("/api/documents/{document_id}/reparse", status_code=202, response_model=PublicDocument)
+        def reparse_document(document_id: Identifier):
+            return document_imports.reparse(document_id)
+
+        @app.delete("/api/documents/{document_id}")
+        def delete_document(document_id: Identifier):
+            document_imports.delete(document_id)
+            return {"deleted": True}
+
+        @app.post("/api/goals/{goal_id}/document-bindings")
+        def bind_document(goal_id: Identifier, body: DocumentBinding):
+            return document_imports.bind(goal_id, body.document_id, body.node_id)
+
+        @app.delete("/api/goals/{goal_id}/document-bindings")
+        def unbind_document(goal_id: Identifier, body: DocumentBinding):
+            return document_imports.bind(goal_id, body.document_id, body.node_id, remove=True)
+
+        @app.post("/api/goals/{goal_id}/document-search")
+        def search_documents(goal_id: Identifier, body: DocumentSearch):
+            return document_imports.search(goal_id, body.query, node_id=body.node_id, limit=body.limit)
 
     if planning is not None:
         @app.get("/api/goals", response_model=list[PlanningView])
@@ -394,7 +468,7 @@ def create_app(
             chunk = learning_context.locate_run_source(record.goal_id, record.node_id, source)
             return {"source": {**source, "status": "valid"}, "text": chunk["text"],
                     "start_offset": chunk["start_offset"], "end_offset": chunk["end_offset"],
-                    "page_number": chunk["page_number"]}
+                    "page_number": chunk["page_number"], "heading": chunk["heading"]}
 
     @app.get("/api/health")
     async def health():

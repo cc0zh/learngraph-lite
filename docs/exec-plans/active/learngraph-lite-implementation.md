@@ -1,5 +1,18 @@
 # LearnGraph Lite 从零实现计划
 
+## 资料上传与检索 HTTP 切片（已完成）
+
+- 范围：UTF-8 TXT/Markdown、文本型 PDF；服务端 ID、10MB/100页/200000字符限额；原文件保存到 SQLite BLOB，异步解析状态与有界工作线程，PDF 在可终止子进程中解析；重启恢复 interrupted，原文件 reparse，ready 不重复解析。
+- 检索：复用 jieba 与 SQLite FTS5 BM25，统一索引/查询分词、安全 MATCH、top5 与文本上限；只检索显式绑定资料。HTTP 绑定/搜索在应用层检查目标/节点存在，上传不调用模型。
+- 验收：上传→状态→原文→绑定→搜索→现有 Agent 引用；真实小型 PDF、扫描/加密/坏编码/限额/超时/重启/重试/删除及引用失效聚合测试；CI、离线评估与演示通过后同步文档并提交。
+- 边界：本轮不实现资料型图谱/练习/学习页生成、React、session/run 持久化或真实供应商验证；总目标持续 active。
+- 实现：`DocumentImports` 与 `SubprocessDocumentParser` 接通 multipart 上传、状态/chunks、reparse、删除及目标/节点绑定/搜索；real factory 与现有 Agent 共用 SQLite document repository。成功状态、全文/chunk/FTS 同事务提交，绑定校验与写入同一写事务；删除后的解析结果不复活。页码、ATX heading、精确 offsets 与 SHA256 贯通检索和 HTTP/SSE 来源定位。
+- 测试收敛：新增 7 个聚合行为测试，覆盖真实两页 PDF 与 Markdown 上传→发布/绑定→检索→Agent 引用→定位→删除降级，以及格式/坏编码/扫描/加密/限额/超时、重启/原文件重试、队列准入、解析中删除、绑定范围、jieba/BM25、旧 schema/index 升级、故障回滚与绑定/删除并发；复用现有评估用例，不为每个字段独立建测试。
+- 验证：`npm.cmd run test:py` 为 92 passed；`npm.cmd run ci` 通过 92 个 Python、19 个 Node 测试及 Python import 边界、文档/仓库/Action 检查；`npm.cmd run eval:offline` 为 20/20；`demo:fixture`、`demo:learning-agent`、`smoke:fixture` 均 exit 0。锁定依赖已安装并核验所用 API/许可。TestClient httpx 弃用提示与关闭测试的预期 graceful timeout/CancelledError 仍存在，smoke 终端中文显示乱码，不影响上述退出结果。
+- 失败与修复：初轮 91 测试遇到 Windows SQLite 连接未关闭，改用显式 closing；本轮首轮 92 测试有 4 个失败，分别修正 SSE 测试的 payload.output 路径、绑定错误文案兼容，以及 Markdown 先按 page marker 再按 heading 切块。独立离线评估曾为 19/20（document_upload_chunks），修复后最终 20/20；上述成功结果均来自修复后执行。
+- 限制：无 OCR；乱码拒绝仅 replacement/control chars 启发式；Markdown 仅 ATX 标题。HTTP 文件固定 revision 1，更新内容需重新上传/绑定；恢复假设同一数据库仅一个 API 进程，不支持多进程任务归属。引用可定位不证明语义支持；无供应商 Key，真实模型 smoke/demo 未运行。
+- 文档收尾：同步 README 接口示例、架构、技术债、三项锁定依赖复用记录、history 与 ready 原子提交学习笔记；修复复用表格中断并更新当前验收限制。最终 `npm.cmd run check:docs` 与 `git diff --check` 通过；仅修改文档后未重复代码全套检查。
+
 ## 目标、范围与风险
 
 - 目标与验收标准：依据 docs/从零构建功能文档.md 从模板项目实现 LearnGraph Lite，最终达到 P0+P1 与 M5 交付：本地原生启动、无 Key 确定性测试、真实模型 smoke 证据、小型评估集/报告、README、复用许可记录、演示脚本、已知局限、分层依赖检查与内核独立运行证据。
@@ -85,7 +98,7 @@
   - React/P1 与完整业务 HTTP 尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
   - HTTP run/事件/请求去重与 session 作用域仅在进程内存中，未实现重启恢复或 token streaming；real factory 已接 planning/learning 只读用例及绑定资料检索/引用定位，完整业务 HTTP 仍待后续。同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
   - assistant tool_calls/tool 消息配对和 Pydantic 工具参数校验已完成；真实供应商兼容性仍待 smoke 验证，见 tech-debt-tracker.md；Starlette TestClient 的 httpx 弃用提示也已记录。
-  - M4A 当前支持 TXT/Markdown 和已抽取文本的 PDF_TEXT；真实 PDF 二进制解析和前端原文页未实现。
+  - M4A 已接通 UTF-8 TXT/Markdown/文本型 PDF 二进制上传、解析与中文 BM25 检索；资料型图谱/练习/学习页 grounding、完整版本历史和 React 原文页未实现。
   - M4B 当前已完成后端声明式包、事件用例和 SQLite 最小持久化；React 固定组件渲染器、HTTP ACK 路由和浏览器 E2E 未实现。
   - fixture demo 不是浏览器录屏或真实模型演示；M5 仍需真实模型 smoke 与最终演示交接材料。
 - 必要的复验方式：

@@ -9,7 +9,7 @@ LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前已�
 - src/learngraph_lite/agent_core/：通用 AgentRunner、工具注册表、模型协议和预算控制。不能导入 LearnGraph 领域、HTTP、ORM 或基础设施。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。不能导入 Agent 内核、应用层或基础设施。
 - src/learngraph_lite/application/：应用用例与编排。当前包含 AgentLoop，负责运行准入、幂等、预算注入、运行摘要、公共事件和唯一终态。
-- src/learngraph_lite/infrastructure/：基础设施适配器。当前有 `SQLitePlanningRepository` 保存目标草稿、澄清轮次和当前图谱快照；`SQLiteDocumentRepository` 保存文本资料、chunk、目标/节点绑定，并用 SQLite FTS5 做最小检索索引；`SQLiteLearningRepository` 保存学习图谱、私有练习、作答和节点学习请求幂等结果；`SQLiteLessonRepository` 保存学习页 package、事件 ACK 和解释任务幂等/失败重试状态；`OpenAIChatGateway` 适配官方模型 SDK。完整业务 SQLite schema、真实 PDF 解析和前端原文页仍待接入。
+- src/learngraph_lite/infrastructure/：基础设施适配器。当前有 `SQLitePlanningRepository` 保存目标草稿、澄清轮次和当前图谱快照；`SQLiteDocumentRepository` 保存原文件、解析状态、文本/chunk、目标/节点绑定和 jieba/FTS5 BM25 索引；`SubprocessDocumentParser` 使用 pypdf/UTF-8 解码与有限子进程超时；`SQLiteLearningRepository` 保存学习图谱、私有练习、作答和节点学习请求幂等结果；`SQLiteLessonRepository` 保存学习页 package、事件 ACK 和解释任务幂等/失败重试状态；`OpenAIChatGateway` 适配官方模型 SDK。完整业务 SQLite schema 和前端原文页仍待接入。
 - src/learngraph_lite/presentation/：公共 DTO/SSE 编码与 FastAPI app factory。路由只校验输入、映射应用错误、编码快照/事件，不执行模型或修改终态。
 - src/learngraph_lite/bootstrap.py：显式装配 fixture 模型与独立 real HTTP factory。真实配置只在装配时读取，SDK 懒导入；fixture 不依赖 SDK 导入，也不会回退到真实模式。导入包本身不启动 Web 或数据库。
 - tests/：同时保留模板 Node 工具测试与新增 Python 架构/内核/领域测试。
@@ -24,7 +24,7 @@ LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前已�
     infrastructure -> application/domain/agent_core 的端口或协议
     bootstrap -> presentation/application/infrastructure
 
-当前 SQLite 持久化边界：已覆盖 M2 planning state 的 `save/get/create/list_ids/mutate` repository port，包含独立 version、澄清轮次/问题和图谱快照；M4A document repository 的文本资料/chunk/绑定/引用定位/FTS5 检索；M3 learning repository 的学习图谱/私有练习/作答/节点学习请求幂等结果；以及 M4B lesson repository 的 package、事件 ACK、解释 run 与失败重试最小状态。planning 启动时补旧表缺失列，旧节点可读取默认新增字段。它没有引入 ORM、迁移工具或 P1 全量业务表，也不覆盖完整运行生命周期、React 或完整 schema 迁移。
+当前 SQLite 持久化边界：已覆盖 M2 planning state 的 `save/get/create/list_ids/mutate` repository port，包含独立 version、澄清轮次/问题和图谱快照；M4A document repository 的原始 BLOB/解析状态/文本/chunk/绑定/引用定位/FTS5 检索；M3 learning repository 的学习图谱/私有练习/作答/节点学习请求幂等结果；以及 M4B lesson repository 的 package、事件 ACK、解释 run 与失败重试最小状态。planning 启动时补旧表缺失列，旧节点可读取默认新增字段；document 启动补 hash/heading 列并在分词版本标记变化时重建索引。它没有引入 ORM、迁移工具或 P1 全量业务表，也不覆盖完整运行生命周期、React 或完整 schema 迁移。
 
 当前离线检查覆盖：
 
@@ -58,7 +58,17 @@ SSE 原子捕获运行快照与事件序号，从该序号后等待新事件；�
 
 Uvicorn 先等待 HTTP/SSE 连接结束才触发 lifespan shutdown，本地启动命令设置 2 秒 graceful shutdown，避免活跃 SSE 无限挡住生命周期关闭。其他启动器也需设置有限的连接关闭等待时间。随后 lifespan 会停止准入、取消活动 run 并等待工作线程退出；同步阻塞模型/工具必须自行设置有限超时，Python 线程无法强行打断供应商调用。
 
-此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配目标澄清/普通知识图谱规划、planning/learning/document 场景和练习生成/作答；上传/PDF、资料型规划、学习页/提案 HTTP 与 React 继续按总计划实施。
+此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配目标澄清/普通知识图谱规划、planning/learning/document 场景、资料上传/解析/绑定/搜索和练习生成/作答；资料型生成、学习页/提案 HTTP 与 React 继续按总计划实施。
+
+## 资料导入与解析
+
+`DocumentImports` 在应用层检查文件大小、生成 UUID、保存原 bytes 并投递任务；两条解析线程、四个活动/排队名额，上传不调用 AgentLoop 或模型。`SubprocessDocumentParser` 在独立 Python 子进程中使用 pypdf 或严格 UTF-8/BOM 解码，20 秒超时由 subprocess.run 终止并回收。HTTP lifespan 等待导入线程关闭，单次解析受超时约束。
+
+SQLite 状态按 uploaded→parsing→ready/failed/unsupported 转移。启动同步把遗留任务标 failed/interrupted，reparse 复用 bytes，ready 不重跑，revision 保持 1。成功状态、全文、chunk 和 FTS 写入在一个事务完成；保存失败一起回滚。完成写入要求当前仍是 parsing，解析中删除后晚到结果不复活资料。恢复假设同一数据库仅有一个 API 进程，不支持多个进程共享解析队列。
+
+Markdown 按 ATX 标题切块并忽略代码围栏，PDF 按显式页码标记切块；chunk 保存原文精确 offsets、heading/page_number 和文本 SHA256。jieba search 分词用于索引和查询，参数化 MATCH 词表达式，SQL BM25 排序与 top5 限额，每块默认最多 320 字符；分值不是置信度。非 ready 上传排除检索，旧 upload_text 文本入口兼容保留。FTS5 不可用时启动失败并给出安装提示。
+
+上传 HTTP 仅接收 multipart bytes；绑定/搜索在应用层检查目标/节点存在，节点绑定需先绑定目标。SQLite 绑定校验和写入持有同一写事务，避免删除/解绑之间留下孤立绑定。删除同时移除原文件、文本、索引和所有绑定，历史来源点击降级；图谱/练习/学习页 grounding 和 React 原文查看器仍待后续。
 
 `BudgetedModelGateway` 位于通用内核，为一次 run 的所有模型请求计数并累积 usage。Runner 复用同一包装器，教学工具和直接生成用例使用父 run 的 gateway；包装器禁止切换预算，避免重复计数。默认模型调用上限六次，JSON 修复最多一次且计入次数。当前尚无 token/context/deadline 控制；供应商网络 timeout 不等于 run deadline。
 

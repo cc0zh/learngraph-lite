@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from contextlib import closing
 import json
+import hashlib
 import sqlite3
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from learngraph_lite.application.documents import ChunkSearchResult
+from learngraph_lite.application.documents import ChunkSearchResult, DocumentAccessError
+from learngraph_lite.application.document_imports import UploadRecord
 from learngraph_lite.application.learning import LearningState
 from learngraph_lite.application.lessons import LessonState
 from learngraph_lite.application.planning import PlanningError, PlanningState
-from learngraph_lite.domain.documents import Citation, Document, DocumentChunk, tokenize
+from learngraph_lite.domain.documents import Citation, Document, DocumentChunk, DocumentKind, tokenize
 from learngraph_lite.domain.lessons import ComponentKind, LessonComponent, LessonEvent, LessonPackage
 from learngraph_lite.domain.learning import Attempt, ExerciseOption, ExercisePrivate, GoalDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus
 
@@ -121,77 +123,84 @@ class SQLiteDocumentRepository:
         self._initialize()
 
     def save_document(self, document: Document, chunks: tuple[DocumentChunk, ...]) -> None:
-        with closing(self._connect()) as connection:
-            with connection:
-                connection.execute(
-                    """
-                    insert into documents(document_id, title, kind, text, version)
-                    values (?, ?, ?, ?, ?)
-                    on conflict(document_id) do update set
-                        title = excluded.title,
-                        kind = excluded.kind,
-                        text = excluded.text,
-                        version = excluded.version
-                    """,
-                    (document.id, document.title, document.kind.value, document.text, document.version),
+        with closing(self._connect()) as connection, connection:
+            self._save_document(connection, document, chunks)
+
+    def _save_document(self, connection: sqlite3.Connection, document: Document,
+                       chunks: tuple[DocumentChunk, ...]) -> None:
+        connection.execute(
+            """
+            insert into documents(document_id, title, kind, text, version)
+            values (?, ?, ?, ?, ?)
+            on conflict(document_id) do update set
+                title = excluded.title,
+                kind = excluded.kind,
+                text = excluded.text,
+                version = excluded.version
+            """,
+            (document.id, document.title, document.kind.value, document.text, document.version),
+        )
+        connection.execute("delete from document_chunks where document_id = ?", (document.id,))
+        connection.execute("delete from document_chunks_fts where document_id = ?", (document.id,))
+        connection.executemany(
+            """
+            insert into document_chunks(
+                chunk_id,
+                document_id,
+                document_version,
+                chunk_index,
+                text,
+                start_offset,
+                end_offset,
+                page_number,
+                text_hash,
+                heading
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    chunk.id,
+                    chunk.document_id,
+                    chunk.document_version,
+                    chunk.index,
+                    chunk.text,
+                    chunk.start_offset,
+                    chunk.end_offset,
+                    chunk.page_number,
+                    hashlib.sha256(chunk.text.encode("utf-8")).hexdigest(),
+                    chunk.heading,
                 )
-                connection.execute("delete from document_chunks where document_id = ?", (document.id,))
-                connection.execute("delete from document_chunks_fts where document_id = ?", (document.id,))
-                connection.executemany(
-                    """
-                    insert into document_chunks(
-                        chunk_id,
-                        document_id,
-                        document_version,
-                        chunk_index,
-                        text,
-                        start_offset,
-                        end_offset,
-                        page_number
-                    )
-                    values (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        (
-                            chunk.id,
-                            chunk.document_id,
-                            chunk.document_version,
-                            chunk.index,
-                            chunk.text,
-                            chunk.start_offset,
-                            chunk.end_offset,
-                            chunk.page_number,
-                        )
-                        for chunk in chunks
-                    ),
-                )
-                connection.executemany(
-                    "insert into document_chunks_fts(chunk_id, document_id, content) values (?, ?, ?)",
-                    ((chunk.id, chunk.document_id, " ".join(tokenize(chunk.text))) for chunk in chunks),
-                )
+                for chunk in chunks
+            ),
+        )
+        connection.executemany(
+            "insert into document_chunks_fts(chunk_id, document_id, content) values (?, ?, ?)",
+            ((chunk.id, chunk.document_id, " ".join(tokenize(chunk.text))) for chunk in chunks),
+        )
 
     def bind_to_goal(self, goal_id: str, document_id: str) -> None:
-        with closing(self._connect()) as connection:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("begin immediate")
             self._require_document(connection, document_id)
-            with connection:
-                connection.execute(
-                    "insert or ignore into goal_document_bindings(goal_id, document_id) values (?, ?)",
-                    (goal_id, document_id),
-                )
+            connection.execute(
+                "insert or ignore into goal_document_bindings(goal_id, document_id) values (?, ?)",
+                (goal_id, document_id),
+            )
 
     def bind_to_node(self, goal_id: str, node_id: str, document_id: str) -> None:
-        with closing(self._connect()) as connection:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("begin immediate")
             self._require_document(connection, document_id)
             if not self._is_bound_to_goal(connection, goal_id, document_id):
-                raise ValueError("document must be bound to goal before binding to node")
-            with connection:
-                connection.execute(
-                    """
-                    insert or ignore into node_document_bindings(goal_id, node_id, document_id)
-                    values (?, ?, ?)
-                    """,
-                    (goal_id, node_id, document_id),
-                )
+                raise DocumentAccessError("goal_binding_required", "document must be bound to goal before binding to node")
+            connection.execute(
+                """
+                insert or ignore into node_document_bindings(goal_id, node_id, document_id)
+                values (?, ?, ?)
+                """,
+                (goal_id, node_id, document_id),
+            )
 
     def bound_document_ids(self, goal_id: str, node_id: str | None = None) -> set[str]:
         with closing(self._connect()) as connection:
@@ -235,7 +244,7 @@ class SQLiteDocumentRepository:
         if not match_query:
             return ()
         placeholders = ",".join("?" for _ in document_ids)
-        params = [match_query, *sorted(document_ids)]
+        params = [match_query, *sorted(document_ids), limit]
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 f"""
@@ -246,24 +255,20 @@ class SQLiteDocumentRepository:
                     chunks.text,
                     chunks.start_offset,
                     chunks.end_offset,
-                    chunks.page_number
+                    chunks.page_number, chunks.heading,
+                    bm25(document_chunks_fts) as rank
                 from document_chunks_fts as fts
                 join document_chunks as chunks on chunks.chunk_id = fts.chunk_id
                 where document_chunks_fts match ?
                     and chunks.document_id in ({placeholders})
+                    and not exists (select 1 from document_uploads as uploads
+                                    where uploads.document_id = chunks.document_id and uploads.status != 'ready')
+                order by rank, chunks.document_id, chunks.chunk_index
+                limit ?
                 """,
                 params,
             ).fetchall()
-        results: list[ChunkSearchResult] = []
-        for row in rows:
-            chunk = _chunk_from_row(row)
-            chunk_tokens = tokenize(chunk.text)
-            chunk_text = chunk.text.casefold()
-            score = sum(1 for token in query_tokens if token in chunk_tokens or token in chunk_text)
-            if score > 0:
-                results.append(ChunkSearchResult(chunk=chunk, score=score))
-        results.sort(key=lambda result: (-result.score, result.chunk.document_id, result.chunk.index))
-        return tuple(results[:limit])
+        return tuple(ChunkSearchResult(chunk=_chunk_from_row(row), score=-float(row[9])) for row in rows)
 
     def resolve_citation(self, citation: Citation) -> DocumentChunk:
         with closing(self._connect()) as connection:
@@ -277,7 +282,7 @@ class SQLiteDocumentRepository:
                 raise ValueError("citation document version is stale")
             chunk_row = connection.execute(
                 """
-                select chunk_id, document_id, document_version, chunk_index, text, start_offset, end_offset, page_number
+                select chunk_id, document_id, document_version, chunk_index, text, start_offset, end_offset, page_number, heading
                 from document_chunks
                 where chunk_id = ? and document_id = ? and document_version = ?
                 """,
@@ -290,6 +295,10 @@ class SQLiteDocumentRepository:
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
             with connection:
+                connection.execute("""create table if not exists document_uploads (
+                    document_id text primary key, filename text not null, kind text, status text not null,
+                    size_bytes integer not null, content_hash text not null, revision integer not null,
+                    reason text, original blob not null)""")
                 connection.execute(
                     """
                     create table if not exists documents (
@@ -312,10 +321,20 @@ class SQLiteDocumentRepository:
                         start_offset integer not null,
                         end_offset integer not null,
                         page_number integer,
+                        text_hash text,
+                        heading text,
                         foreign key(document_id) references documents(document_id)
                     )
                     """
                 )
+                columns = {row[1] for row in connection.execute("pragma table_info(document_chunks)")}
+                if "text_hash" not in columns:
+                    connection.execute("alter table document_chunks add column text_hash text")
+                if "heading" not in columns:
+                    connection.execute("alter table document_chunks add column heading text")
+                for chunk_id, text in connection.execute("select chunk_id, text from document_chunks where text_hash is null").fetchall():
+                    connection.execute("update document_chunks set text_hash = ? where chunk_id = ?",
+                                       (hashlib.sha256(text.encode("utf-8")).hexdigest(), chunk_id))
                 connection.execute(
                     """
                     create table if not exists goal_document_bindings (
@@ -337,12 +356,74 @@ class SQLiteDocumentRepository:
                     )
                     """
                 )
-                connection.execute(
-                    """
-                    create virtual table if not exists document_chunks_fts
-                    using fts5(chunk_id unindexed, document_id unindexed, content)
-                    """
-                )
+                try:
+                    connection.execute("""create virtual table if not exists document_chunks_fts
+                        using fts5(chunk_id unindexed, document_id unindexed, content)""")
+                except sqlite3.OperationalError as exc:
+                    raise RuntimeError("SQLite FTS5 is required for document search; install Python 3.13+ with FTS5-enabled SQLite (see README).") from exc
+                connection.execute("create table if not exists document_index_metadata (name text primary key, value text)")
+                indexed = connection.execute("select value from document_index_metadata where name = 'tokenizer'").fetchone()
+                if indexed is None or indexed[0] != 'jieba-0.42.1-search-v1':
+                    connection.execute("delete from document_chunks_fts")
+                    rows = connection.execute("select chunk_id, document_id, text from document_chunks").fetchall()
+                    connection.executemany("insert into document_chunks_fts(chunk_id, document_id, content) values (?, ?, ?)",
+                                           ((row[0], row[1], ' '.join(tokenize(row[2]))) for row in rows))
+                    connection.execute("insert or replace into document_index_metadata values ('tokenizer', 'jieba-0.42.1-search-v1')")
+
+    def create_upload(self, record: UploadRecord, original: bytes) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("insert into document_uploads values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               (record.document_id, record.filename, record.kind, record.status, record.size_bytes,
+                                record.content_hash, record.revision, record.reason, original))
+
+    def get_upload(self, document_id: str) -> UploadRecord:
+        with closing(self._connect()) as connection:
+            row = connection.execute("""select document_id, filename, kind, status, size_bytes, content_hash,
+                                        revision, reason from document_uploads where document_id = ?""",
+                                     (document_id,)).fetchone()
+        if row is None:
+            raise KeyError(document_id)
+        return UploadRecord(row[0], row[1], DocumentKind(row[2]) if row[2] else None, *row[3:])
+
+    def original_bytes(self, document_id: str) -> bytes:
+        with closing(self._connect()) as connection:
+            row = connection.execute("select original from document_uploads where document_id = ?", (document_id,)).fetchone()
+        if row is None:
+            raise KeyError(document_id)
+        return bytes(row[0])
+
+    def transition_upload(self, document_id: str, expected: tuple[str, ...], status: str) -> bool:
+        placeholders = ','.join('?' for _ in expected)
+        with closing(self._connect()) as connection, connection:
+            return connection.execute(f"update document_uploads set status = ?, reason = null where document_id = ? and status in ({placeholders})",
+                                      (status, document_id, *expected)).rowcount == 1
+
+    def finish_upload(self, document_id: str, status: str, reason: str | None,
+                      document: Document | None = None, chunks: tuple[DocumentChunk, ...] = ()) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("begin immediate")
+            changed = connection.execute("update document_uploads set status = ?, reason = ? where document_id = ? and status = 'parsing'",
+                                         (status, reason, document_id)).rowcount
+            # Deletion or restart recovery must not be undone by a late worker.
+            if changed and document is not None:
+                self._save_document(connection, document, chunks)
+
+    def recover_uploads(self) -> None:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("update document_uploads set status = 'failed', reason = 'interrupted' where status in ('uploaded', 'parsing')")
+
+    def document_chunks(self, document_id: str) -> tuple[DocumentChunk, ...]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute("""select chunk_id, document_id, document_version, chunk_index, text,
+                start_offset, end_offset, page_number, heading from document_chunks where document_id = ? order by chunk_index""",
+                                      (document_id,)).fetchall()
+        return tuple(_chunk_from_row(row) for row in rows)
+
+    def delete_document(self, document_id: str) -> None:
+        with closing(self._connect()) as connection, connection:
+            for table in ('document_chunks_fts', 'document_chunks', 'node_document_bindings',
+                          'goal_document_bindings', 'documents', 'document_uploads'):
+                connection.execute(f"delete from {table} where document_id = ?", (document_id,))
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._database_path)
@@ -350,7 +431,10 @@ class SQLiteDocumentRepository:
     def _require_document(self, connection: sqlite3.Connection, document_id: str) -> None:
         row = connection.execute("select 1 from documents where document_id = ?", (document_id,)).fetchone()
         if row is None:
-            raise ValueError(f"unknown document: {document_id}")
+            raise DocumentAccessError("document_not_found", f"unknown document: {document_id}")
+        upload = connection.execute("select status from document_uploads where document_id = ?", (document_id,)).fetchone()
+        if upload and upload[0] != "ready":
+            raise DocumentAccessError("document_not_ready", "Document is not ready.")
 
     def _is_bound_to_goal(self, connection: sqlite3.Connection, goal_id: str, document_id: str) -> bool:
         row = connection.execute(
@@ -855,12 +939,13 @@ def _chunk_from_row(row: sqlite3.Row | tuple) -> DocumentChunk:
         start_offset=int(row[5]),
         end_offset=int(row[6]),
         page_number=int(row[7]) if row[7] is not None else None,
+        heading=row[8],
     )
 
 
 def _fts_match_query(query_tokens: set[str]) -> str:
     tokens = sorted(token for token in query_tokens if token)
-    return " OR ".join(f'"{token}"' for token in tokens)
+    return " OR ".join('"' + token.replace('"', '""') + '"' for token in tokens)
 
 
 def _learning_run_maps(data: str) -> tuple[dict[str, str], dict[str, str]]:

@@ -49,7 +49,7 @@ def test_sqlite_document_repository_restores_bindings_and_searches_with_fts5():
     assert zh_hits[0].citation.document_id == document.id
     assert "检索" in zh_hits[0].chunk.text
     assert en_hits
-    assert en_hits[0].score >= 1
+    assert en_hits[0].score > 0
     assert located.id == zh_hits[0].chunk.id
 
 

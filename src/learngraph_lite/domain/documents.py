@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -32,6 +33,7 @@ class DocumentChunk:
     start_offset: int
     end_offset: int
     page_number: int | None = None
+    heading: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class Citation:
     start_offset: int
     end_offset: int
     page_number: int | None = None
+    heading: str | None = None
 
 
 def parse_text_document(document_id: str, title: str, content: str, *, kind: DocumentKind = DocumentKind.TEXT) -> Document:
@@ -62,14 +65,22 @@ def chunk_document(document: Document, *, max_chars: int = 320, overlap: int = 4
         raise ValueError("overlap must be non-negative and smaller than max_chars")
 
     chunks: list[DocumentChunk] = []
-    sections = _page_sections(document.text)
-    for page_number, section_start, section_end in sections:
+    sections = tuple(
+        (page, start + local_start, start + local_end, heading)
+        for page, start, end in _page_sections(document.text)
+        for _, local_start, local_end, heading in (
+            _heading_sections(document.text[start:end]) if document.kind == DocumentKind.MARKDOWN else
+            ((None, 0, end - start, None),)
+        )
+    )
+    for page_number, section_start, section_end, heading in sections:
         _append_chunks(
             chunks,
             document=document,
             span_start=section_start,
             span_end=section_end,
             page_number=page_number,
+            heading=heading,
             max_chars=max_chars,
             overlap=overlap,
         )
@@ -83,13 +94,14 @@ def _append_chunks(
     span_start: int,
     span_end: int,
     page_number: int | None,
+    heading: str | None,
     max_chars: int,
     overlap: int,
 ) -> None:
     start = span_start
     while start < span_end:
         end = min(span_end, start + max_chars)
-        if end < len(document.text):
+        if end < span_end:
             boundary = max(
                 document.text.rfind("\n", start, end),
                 document.text.rfind("。", start, end),
@@ -109,8 +121,9 @@ def _append_chunks(
                     index=len(chunks),
                     text=text,
                     start_offset=start + leading,
-                    end_offset=end,
+                    end_offset=start + leading + len(text),
                     page_number=page_number,
+                    heading=heading,
                 )
             )
         if end >= span_end:
@@ -133,22 +146,20 @@ def make_citation(citation_id: str, chunk: DocumentChunk, quote: str | None = No
         start_offset=start,
         end_offset=start + len(selected),
         page_number=chunk.page_number,
+        heading=chunk.heading,
     )
 
 
 def tokenize(text: str) -> tuple[str, ...]:
-    words = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+", text.casefold())
-    tokens: list[str] = []
-    for word in words:
-        tokens.append(word)
-        if re.fullmatch(r"[\u4e00-\u9fff]+", word):
-            tokens.extend(word[index] for index in range(len(word)))
-            tokens.extend(word[index : index + 2] for index in range(max(0, len(word) - 1)))
-    return tuple(tokens)
+    import jieba
+
+    jieba.setLogLevel(logging.WARNING)
+    return tuple(token for token in jieba.cut_for_search(text.casefold(), HMM=False)
+                 if re.fullmatch(r"[a-z0-9_\u4e00-\u9fff]+", token))
 
 
 def _page_sections(text: str) -> tuple[tuple[int | None, int, int], ...]:
-    markers = list(re.finditer(r"\f|\n\s*---\s*page\s+(\d+)\s*---\s*\n", text, flags=re.IGNORECASE))
+    markers = list(re.finditer(r"\f|(?:^|\n)\s*---\s*page\s+(\d+)\s*---\s*\n", text, flags=re.IGNORECASE))
     if not markers:
         return ((None, 0, len(text)),)
     sections: list[tuple[int | None, int, int]] = []
@@ -162,3 +173,27 @@ def _page_sections(text: str) -> tuple[tuple[int | None, int, int], ...]:
     if start < len(text):
         sections.append((page, start, len(text)))
     return tuple(sections)
+
+
+def _heading_sections(text: str) -> tuple[tuple[None, int, int, str | None], ...]:
+    starts: list[tuple[int, str | None]] = [(0, None)]
+    fence: str | None = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if marker:
+            run, rest = marker.groups()
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence) and not rest.strip():
+                fence = None
+        elif fence is None:
+            heading = re.match(r"^ {0,3}#{1,6}[ \t]+(.+)$", line)
+            if heading:
+                label = re.sub(r"[ \t]+#+[ \t]*$", "", heading.group(1)).strip()
+                if offset == 0:
+                    starts.clear()
+                starts.append((offset, label))
+        offset += len(line)
+    return tuple((None, start, starts[index + 1][0] if index + 1 < len(starts) else len(text), heading)
+                 for index, (start, heading) in enumerate(starts))

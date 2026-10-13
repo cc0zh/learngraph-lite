@@ -14,6 +14,7 @@ from learngraph_lite.agent_core.gateway import budgeted
 from learngraph_lite.application.agent import AgentLoop, DirectResult, RunRequest
 from learngraph_lite.application.exercise_generation import GenerateExercise
 from learngraph_lite.application.documents import DocumentRepository
+from learngraph_lite.application.document_imports import DocumentImports
 from learngraph_lite.application.learning import LearningRepository, LearningService
 from learngraph_lite.application.learning_agent import LearningContext
 from learngraph_lite.application.planning import PlanningRepository, PlanningService
@@ -122,8 +123,10 @@ def create_real_app(*, database: str | Path | None = None):
     """Explicit real-model factory; missing configuration fails at startup."""
     from learngraph_lite.presentation.http import create_app
     from learngraph_lite.infrastructure import SQLiteDocumentRepository, SQLiteLearningRepository, SQLitePlanningRepository
+    from learngraph_lite.infrastructure.document_parser import SubprocessDocumentParser
 
     gateway = build_real_gateway()
+    imports = None
     try:
         database_path = Path(database or os.environ.get("LEARNGRAPH_DATABASE_PATH", ".local/learngraph.sqlite3"))
         database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,11 +134,15 @@ def create_real_app(*, database: str | Path | None = None):
         learning = SQLiteLearningRepository(database_path)
         documents = SQLiteDocumentRepository(database_path)
         loop = build_learning_loop(gateway, planning, learning, documents)
+        imports = DocumentImports(documents, SubprocessDocumentParser(), PlanningService(planning))
         return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close,
                           learning_context=LearningContext(planning, learning, documents),
                           exercises=GenerateExercise(learning, LearningContext(planning, learning).context),
-                          planning=PlanningService(planning), on_publish=LearningService(learning).start_goal)
+                          planning=PlanningService(planning), on_publish=LearningService(learning).start_goal,
+                          document_imports=imports)
     except Exception:
+        if imports is not None:
+            imports.close()
         gateway.close()
         raise
 

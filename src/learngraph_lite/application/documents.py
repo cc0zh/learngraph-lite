@@ -20,14 +20,14 @@ from learngraph_lite.domain.documents import (
 @dataclass(frozen=True)
 class SearchHit:
     chunk: DocumentChunk
-    score: int
+    score: float
     citation: Citation
 
 
 @dataclass(frozen=True)
 class ChunkSearchResult:
     chunk: DocumentChunk
-    score: int
+    score: float
 
 
 class DocumentAccessError(ValueError):
@@ -144,11 +144,13 @@ class DocumentService:
     def unbind_node(self, goal_id: str, node_id: str, document_id: str) -> None:
         self._repository.unbind_from_node(goal_id, node_id, document_id)
 
-    def search(self, goal_id: str, query: str, *, node_id: str | None = None, limit: int = 3) -> tuple[SearchHit, ...]:
+    def search(self, goal_id: str, query: str, *, node_id: str | None = None, limit: int = 5) -> tuple[SearchHit, ...]:
+        if not query.strip() or len(query) > 500 or not 1 <= limit <= 5:
+            raise DocumentAccessError("invalid_document_request", "Query must contain 1–500 characters; limit is 1–5.")
         document_ids = self._repository.bound_document_ids(goal_id, node_id)
         if not document_ids:
             raise DocumentAccessError("no_documents_bound", "no documents bound to this scope")
-        query_tokens = set(tokenize(query))
+        query_tokens = set(tokenize(query)[:64])
         if not query_tokens:
             return ()
         results = self._repository.search_chunks(document_ids, query_tokens, limit)

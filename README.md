@@ -2,7 +2,7 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料检索、回答引用和结构化练习生成。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
+当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料上传/PDF 解析、中文 BM25 检索、回答引用和结构化练习生成。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
 
 ## 开发准备
 
@@ -110,7 +110,37 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/runs/$($run.run_id)/citations/C1"
 
 完成的节点回答在 GET run 与 SSE 中返回 `output.citation_map` 和 `output.unverified_citation_ids`。C1 等编号仅在本轮有效，来源记录含文档/片段 ID、版本、引用位置、内容摘要值、是否被引用及 `valid/stale/unavailable` 状态。未知编号保留为未验证，不提供来源；引用原文接口未知返回 404，内容变化或解绑返回 409。上面原文命令仅在本轮确实返回 C1 时可用。GET run 保留完成时快照，点击原文重新校验当前绑定和内容；无绑定/空召回要求明确说明资料不足，普通知识解释标注“非基于上传资料”。
 
-当前检索沿用简单中英文 tokenize + SQLite FTS5，不是 jieba/BM25 升级。来源有效性只证明片段可定位，不证明原文支持回答语义；同版本覆盖通过片段摘要值和位置检测失效，完整文档版本管理、上传/PDF 与前端原文页仍待完成。
+当前检索使用 jieba search 分词和 SQLite FTS5 BM25，默认 top 5、每块最多 320 字符；分值用于排序，不是可信度。来源有效性只证明片段可定位，不证明原文支持回答语义；旧 upload_text 同版本覆盖通过片段摘要值和位置检测失效。HTTP 上传文件内容固定为 revision 1，重试不变更内容；更新资料需重新上传、重新绑定。完整版本历史和前端原文页仍待完成。
+
+## 上传资料与检索
+
+以下接口由 real API 装配，但上传、解析和直接搜索不调用模型。支持 UTF-8/BOM TXT、Markdown 和文本型 PDF，最多 10 MB、100 页、200,000 字符。PDF 使用 pypdf；解析在有 20 秒超时的子进程执行，最多两个同时解析、四个活动或排队任务。Markdown 按 ATX 标题切块，代码围栏内的 `#` 不作为标题；PDF 保留页码。原 bytes、状态、文本、chunk 和哈希保存在本地 SQLite 中，文件名只展示，上传接口不接收服务端路径。
+
+PowerShell 示例（已有目标 demo-goal 和节点 document-loading）：
+
+```powershell
+# 把 .\notes.md 替换为自己的 UTF-8 文件。
+$doc = curl.exe -s -F 'file=@notes.md' http://127.0.0.1:8000/api/documents | ConvertFrom-Json
+Invoke-RestMethod "http://127.0.0.1:8000/api/documents/$($doc.document_id)"
+# 等 GET 状态为 ready 后，查看原文并分别绑定目标和节点。
+Invoke-RestMethod "http://127.0.0.1:8000/api/documents/$($doc.document_id)/chunks?offset=0&limit=50"
+$binding = @{document_id=$doc.document_id} | ConvertTo-Json
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body $binding `
+  -Uri http://127.0.0.1:8000/api/goals/demo-goal/document-bindings
+$binding = @{document_id=$doc.document_id; node_id='document-loading'} | ConvertTo-Json
+Invoke-RestMethod -Method Post -ContentType 'application/json' -Body $binding `
+  -Uri http://127.0.0.1:8000/api/goals/demo-goal/document-bindings
+$query = @{query='检索'; node_id='document-loading'; limit=5} | ConvertTo-Json
+Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($query)) `
+  -Uri http://127.0.0.1:8000/api/goals/demo-goal/document-search
+```
+
+上传返回 202，状态依次为 uploaded、parsing，终态为 ready/failed/unsupported。扫描 PDF 为 unsupported/needs_ocr；加密、坏 PDF、坏编码和不可读文本也明确拒绝，不支持 OCR、Office 文件。重启把未完成解析标为 failed/interrupted；`POST /api/documents/{id}/reparse` 复用原文件，ready 时返回已有结果。解析成功状态与全文/chunk/FTS 在同一事务提交，只有 ready 上传可检索。
+
+`DELETE /api/goals/{goal_id}/document-bindings` 使用相同 JSON body 解绑；解绑目标也移除它的节点绑定。`DELETE /api/documents/{id}` 删除原文件、索引及所有绑定，晚到解析结果不会恢复已删除资料，历史回答来源降级为 unavailable。chunk 接口每页最多 50 块，返回页码或 heading、原文 offsets 和 SHA256；节点 Agent 复用这些资料与本轮 C1 来源表。资料型图谱/练习/学习页 grounding 仍待实现。
+
+启动必须有 SQLite FTS5。若报错 `SQLite FTS5 is required`，安装 Python 3.13+ 的官方发行版（含 FTS5）并用该解释器重新创建项目虚拟环境、执行 `uv sync --locked --group dev`；可用 `uv run --locked python -c "import sqlite3; sqlite3.connect(':memory:').execute('create virtual table probe using fts5(text)'); print('FTS5 OK')"` 验证。当前解析恢复按单个 API 进程使用同一数据库设计。
 
 ## 目标澄清与图谱规划
 
@@ -167,8 +197,8 @@ operation 与题目持久化于 SQLite；run/root 关联仍仅在当前进程可
 - src/learngraph_lite/agent_core/：独立 Agent 内核，包含模型协议、工具注册表、Runner 和预算控制。
 - src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入、运行摘要、公共事件和终态。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。
-- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run 路由、目标澄清/图谱规划、节点只读接口和练习生成/作答接口；HTTP 调用应用层用例。
-- src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson 的最小 SQLite repository、SQLite FTS5 检索与官方 OpenAI SDK Chat Completions gateway；完整业务持久化、真实 PDF 解析和前端原文页仍待接入。
+- src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run 路由、目标澄清/图谱规划、资料上传/绑定/检索、节点只读接口和练习生成/作答接口；HTTP 调用应用层用例。
+- src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson 的最小 SQLite repository、jieba/FTS5 BM25 检索、pypdf 子进程解析与官方 OpenAI SDK Chat Completions gateway；完整业务持久化和前端原文页仍待接入。
 
 更多边界见 docs/ARCHITECTURE.md。
 
