@@ -61,7 +61,7 @@ def build_fixture_loop() -> AgentLoop:
 def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learning: LearningRepository,
                         documents: DocumentRepository | None = None) -> AgentLoop:
     context = LearningContext(planning, learning, documents)
-    generator = GenerateExercise(learning, context.context)
+    generator = GenerateExercise(learning, context.context, documents)
     planner = GeneratePlanning(PlanningService(planning), documents)
 
     def plan(request, budget, root_task_id):
@@ -76,7 +76,8 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
         gateway = budgeted(model, budget)
         result = generator.generate(request.goal_id, request.node_id, root_task_id,
                                     {"count": request.exercise_count, "purpose": request.exercise_purpose}, gateway)
-        return DirectResult("练习已保存（非基于上传资料）。", result, dict(gateway.usage))
+        label = "基于上传资料" if result["source_mode"] == "documents" else "非基于上传资料"
+        return DirectResult(f"练习已保存（{label}）。", result, dict(gateway.usage))
 
     def validate(request):
         if request.mode in {"exercise", "teaching"}:
@@ -137,7 +138,7 @@ def create_real_app(*, database: str | Path | None = None):
         imports = DocumentImports(documents, SubprocessDocumentParser(), PlanningService(planning))
         return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close,
                           learning_context=LearningContext(planning, learning, documents),
-                          exercises=GenerateExercise(learning, LearningContext(planning, learning).context),
+                          exercises=GenerateExercise(learning, LearningContext(planning, learning, documents).context, documents),
                           planning=PlanningService(planning), on_publish=LearningService(learning).start_goal,
                           document_imports=imports)
     except Exception:

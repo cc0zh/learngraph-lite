@@ -162,9 +162,9 @@ class DocumentService:
     def locate(self, citation: Citation) -> DocumentChunk:
         return self._repository.resolve_citation(citation)
 
-    def locate_bound(self, goal_id: str, node_id: str, citation: Citation) -> DocumentChunk:
+    def locate_bound(self, goal_id: str, node_id: str | None, citation: Citation) -> DocumentChunk:
         if citation.document_id not in self._repository.bound_document_ids(goal_id, node_id):
-            raise DocumentAccessError("source_unavailable", "Source is no longer bound to this node.")
+            raise DocumentAccessError("source_unavailable", "Source is no longer bound to this scope.")
         try:
             return self.locate(citation)
         except ValueError as exc:

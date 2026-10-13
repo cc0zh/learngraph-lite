@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -14,6 +15,7 @@ class GraphNode:
     explanation: str = ""
     learning_outcome: str = ""
     priority: int = 0
+    citation_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,8 @@ class GraphSnapshot:
     status: GraphStatus
     revision: int = 0
     content_revision: int = 0
+    source_mode: str = "general"
+    citation_map: dict[str, dict] = field(default_factory=dict)
 
     def as_draft(self) -> GraphDraft:
         return GraphDraft(nodes=self.nodes, edges=self.edges)
@@ -92,10 +96,21 @@ def validate_graph(graph: GraphDraft) -> tuple[str, ...]:
     return tuple(errors)
 
 
+def validate_node_citations(nodes: tuple[GraphNode, ...], sources: dict) -> tuple[str, ...]:
+    errors = []
+    for node in nodes:
+        used = set(node.citation_ids)
+        mentioned = set(re.findall(r"\[(C[0-9]+)\]", "\n".join(
+            (node.title, node.explanation, node.learning_outcome))))
+        if len(used) != len(node.citation_ids) or not used.issubset(sources) or not mentioned.issubset(used):
+            errors.append(f"node {node.id} citations must be unique and belong to this graph's source table")
+    return tuple(errors)
+
+
 def publish_graph(snapshot: GraphSnapshot, expected_revision: int) -> GraphSnapshot:
     if snapshot.revision != expected_revision:
         raise RevisionConflict(expected_revision=expected_revision, actual_revision=snapshot.revision)
-    errors = validate_graph(snapshot.as_draft())
+    errors = validate_graph(snapshot.as_draft()) + validate_node_citations(snapshot.nodes, snapshot.citation_map)
     if errors:
         raise GraphValidationError(errors)
     return GraphSnapshot(
@@ -105,6 +120,8 @@ def publish_graph(snapshot: GraphSnapshot, expected_revision: int) -> GraphSnaps
         status=GraphStatus.PUBLISHED,
         revision=snapshot.revision + 1,
         content_revision=snapshot.content_revision + 1,
+        source_mode=snapshot.source_mode,
+        citation_map=snapshot.citation_map,
     )
 
 

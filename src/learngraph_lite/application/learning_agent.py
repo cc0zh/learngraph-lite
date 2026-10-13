@@ -11,7 +11,7 @@ from learngraph_lite.agent_core import AgentRunner, TextMessage, Tool, ToolError
 from learngraph_lite.agent_core.models import ModelGateway
 from learngraph_lite.agent_core.gateway import BudgetedModelGateway
 from learngraph_lite.application.agent import PreparedRun, RunRequest
-from learngraph_lite.application.document_agent import DOCUMENT_INSTRUCTIONS, DocumentTurn, locate_source
+from learngraph_lite.application.document_agent import DOCUMENT_INSTRUCTIONS, DocumentTurn, locate_source, project_sources
 from learngraph_lite.application.documents import DocumentAccessError, DocumentRepository, DocumentService
 from learngraph_lite.application.exercise_generation import ExerciseError, ExerciseInput, GenerateExercise
 from learngraph_lite.application.learning import LearningRepository, LearningService, StaleLearningGraphError
@@ -47,12 +47,19 @@ class LearningContext:
         self._planning = planning
         self._learning_repository = learning
         self._learning = LearningService(learning)
+        self._document_repository = documents
         self._documents = DocumentService(documents) if documents is not None else None
 
-    def locate_run_source(self, goal_id: str, node_id: str, source: dict) -> dict:
+    def locate_run_source(self, goal_id: str, node_id: str | None, source: dict) -> dict:
         if self._documents is None:
             raise DocumentAccessError("source_unavailable", "Document retrieval is not configured.")
         return asdict(locate_source(self._documents, goal_id, node_id, source))
+
+    def project_graph_sources(self, graph) -> dict:
+        data = asdict(graph)
+        data.update(project_sources(self._documents, graph.goal_id, None, graph.citation_map,
+                                    {key for node in graph.nodes for key in node.citation_ids}))
+        return data
 
     def _published_graph(self, goal_id: str, node_id: str) -> PlanningState:
         try:
@@ -124,13 +131,13 @@ class LearningContext:
         if request.mode == "teaching":
             if not isinstance(model, BudgetedModelGateway) or root_task_id is None:
                 raise LearningContextError("generation_not_configured", "Teaching requires a shared execution gateway.")
-            generator = GenerateExercise(self._learning_repository, self.context)
+            generator = GenerateExercise(self._learning_repository, self.context, self._document_repository)
 
             def create_exercise(args: dict):
                 read({})
                 try:
                     result = generator.generate(goal_id, node_id, root_task_id, args, model)
-                except ExerciseError as exc:
+                except (ExerciseError, DocumentAccessError) as exc:
                     raise ToolError(f"{exc.code}: {exc}") from exc
                 generated.update(result)
                 return result
@@ -138,7 +145,7 @@ class LearningContext:
                 "create_exercise", "Generate and save one batch of practice; returns only public questions.",
                 ExerciseInput, create_exercise,
             ))
-            generation_instructions = "create_exercise 可创建每任务一批单选题；题量1至3，使用相同参数重试。仅保存成功才算出题。题目非基于上传资料。正式答案和解析由作答接口返回，不猜测或披露正确选项。"
+            generation_instructions = "create_exercise 可创建每任务一批单选题；题量1至3，使用相同参数重试。仅保存成功才算出题。来源模式以工具返回为准；题目 citation_map 属于该题，不能用作回答的引用表。正式答案和解析由作答接口返回，不猜测或披露正确选项。"
 
         def project(text: str) -> dict:
             return {**(turn.project_output(text) if turn is not None else {}), **generated}

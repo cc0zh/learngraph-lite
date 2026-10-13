@@ -27,17 +27,20 @@ from learngraph_lite.infrastructure import SQLiteDocumentRepository, SQLiteLearn
 class LearningFixtureModel:
     def complete(self, messages, tools):
         if not tools:
-            purpose = json.loads(messages[1].content)["purpose"]
+            context = json.loads(messages[1].content)
+            purpose = context["purpose"]
+            citation_ids = [context["sources"][0]["id"]] if context["sources"] else []
             return ModelResponse(content=json.dumps({"exercises": [{
                 "prompt": f"清洗资料时如何保留引用定位？（{purpose}）",
                 "options": [{"id": "a", "text": "丢弃原文位置"}, {"id": "b", "text": "保存片段与原文偏移"}],
-                "correct_option_id": "b", "explanation": "保存偏移可让回答引用返回原文位置；本题非基于上传资料。",
+                "correct_option_id": "b", "explanation": "保存偏移可让回答引用返回原文位置。",
+                "citation_ids": citation_ids,
             }]}, ensure_ascii=False))
         results = [json.loads(message.content) for message in messages if message.role == "tool"]
         if any(tool["function"]["name"] == "create_exercise" for tool in tools):
             if not results:
                 return ModelResponse(tool_calls=(ToolCall("create-1", "create_exercise", '{"purpose":"demo-teaching"}'),))
-            return ModelResponse(content="fixture：练习已保存（非基于上传资料），请选择选项后提交。")
+            return ModelResponse(content="fixture：练习已保存，来源模式以题目数据为准，请选择选项后提交。")
         if not results:
             query = "zzzz-no-match" if "空召回" in messages[2].content else "清洗"
             return ModelResponse(tool_calls=(
@@ -106,8 +109,8 @@ def run_demo(database: Path, *, real: bool = False) -> dict:
                                         goal_id="demo-goal", node_id="document-loading"))
             if button.status != "completed" or tutor.status != "completed":
                 raise RuntimeError(button.error or tutor.error)
-            context = LearningContext(planning_repository, learning_repository)
-            generator = GenerateExercise(learning_repository, context.context)
+            context = LearningContext(planning_repository, learning_repository, document_repository)
+            generator = GenerateExercise(learning_repository, context.context, document_repository)
             feedback = generator.submit_answer("demo-goal", button.output["exercises"][0]["id"], "b", "generated-a1")
             feedback["attempt"]["created_at"] = feedback["attempt"]["created_at"].isoformat()
             practice = {"button": button.output, "teaching": tutor.output,

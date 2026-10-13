@@ -506,9 +506,10 @@ class SQLiteLearningRepository:
                 options_json,
                 correct_option_id,
                 explanation,
-                normalized_hash
+                normalized_hash,
+                sources_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 (
@@ -521,6 +522,8 @@ class SQLiteLearningRepository:
                     exercise.correct_option_id,
                     exercise.explanation,
                     exercise.normalized_hash,
+                    json.dumps({"source_mode": exercise.source_mode, "citation_ids": exercise.citation_ids,
+                                "citation_map": exercise.citation_map}, ensure_ascii=False, sort_keys=True),
                 )
                 for exercise in state.exercises.values()
             ),
@@ -570,7 +573,7 @@ class SQLiteLearningRepository:
         exercise_rows = connection.execute(
             """
             select exercise_id, node_id, graph_content_revision, prompt, options_json,
-                correct_option_id, explanation, normalized_hash
+                correct_option_id, explanation, normalized_hash, sources_json
             from learning_exercises
             where goal_id = ?
             order by exercise_id
@@ -597,6 +600,9 @@ class SQLiteLearningRepository:
                 correct_option_id=row[5],
                 explanation=row[6],
                 normalized_hash=row[7],
+                source_mode=json.loads(row[8]).get("source_mode", "general"),
+                citation_ids=tuple(json.loads(row[8]).get("citation_ids", ())),
+                citation_map=json.loads(row[8]).get("citation_map", {}),
             )
             for row in exercise_rows
         }
@@ -650,10 +656,14 @@ class SQLiteLearningRepository:
                         correct_option_id text not null,
                         explanation text not null,
                         normalized_hash text not null,
+                        sources_json text not null default '{}',
                         primary key(goal_id, exercise_id)
                     )
                     """
                 )
+                exercise_columns = {row[1] for row in connection.execute("pragma table_info(learning_exercises)")}
+                if "sources_json" not in exercise_columns:
+                    connection.execute("alter table learning_exercises add column sources_json text not null default '{}'")
                 connection.execute(
                     """
                     create table if not exists learning_attempts (
@@ -915,17 +925,22 @@ def _graph_to_json(graph: GraphSnapshot | None) -> dict | None:
         "status": graph.status.value,
         "revision": graph.revision,
         "content_revision": graph.content_revision,
+        "source_mode": graph.source_mode,
+        "citation_map": graph.citation_map,
     }
 
 
 def _graph_from_json(data: dict) -> GraphSnapshot:
     return GraphSnapshot(
         goal_id=data["goal_id"],
-        nodes=tuple(GraphNode(**node) for node in data.get("nodes", ())),
+        nodes=tuple(GraphNode(**{**node, "citation_ids": tuple(node.get("citation_ids", ()))})
+                    for node in data.get("nodes", ())),
         edges=tuple(GraphEdge(**edge) for edge in data.get("edges", ())),
         status=GraphStatus(data["status"]),
         revision=int(data.get("revision", 0)),
         content_revision=int(data.get("content_revision", 0)),
+        source_mode=data.get("source_mode", "general"),
+        citation_map=data.get("citation_map", {}),
     )
 
 

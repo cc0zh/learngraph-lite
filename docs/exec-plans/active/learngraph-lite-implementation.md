@@ -1,5 +1,18 @@
 # LearnGraph Lite 从零实现计划
 
+## 资料型图谱与练习生成切片（已完成）
+
+- 范围：复用显式目标/节点绑定检索，top5、每片段320字符；图谱与练习模型上下文包含真实资料，repair 共用来源表。无绑定标 general，有绑定空召回明确失败。
+- 来源：服务端生成 citation map，候选只能选择本次来源 ID；图谱版本、每题和回答分别保存来源表。保存前复验绑定、版本、hash/offset；发布保留图谱来源，人工修改保留来源表并标 edited，清除生成来源声明。
+- 验收：上下文原文、未知/越界引用、空召回、稳定 repair、产物 C1 不串、SQLite 重开/旧 schema、生成期间解绑/覆盖、HTTP/SSE 公共投影和删除后定位降级；相关测试、CI、离线评估/演示通过后同步文档并提交。
+- 边界：不增加独立模型队列或平台；沿用共享 gateway/budget 和 generation operation。跨资料/业务仓库仍存在保存前校验后的并发窄窗口，引用程序校验不证明语义支持。学习页 grounding、React、运行持久化与真实供应商验收仍待后续。
+- 实现：GenerationSources 输入实际检索片段，候选只选来源 ID；图谱快照与每题分别持久 citation_map，公共练习/工具结果仍不含正式答案与私有解析。GET 图谱/题目动态投影来源状态；图谱定位核对 planning version，题目定位按 exercise_id 隔离。SQLite 自动补 sources_json 并兼容旧图谱/练习 metadata。
+- 审查修复：人工编辑与提案共用纯领域引用校验，拒绝未知正文标记、越界与重复 IDs；图谱 GET 改为单份规划快照，避免版本/来源混读。保留已有引用表并标 edited，以维持原文定位，但不宣称编辑内容仍由资料生成。
+- 测试收敛：新增 6 个聚合行为测试，覆盖真实上下文/top5/1600限额、隐藏资料排除、稳定 repair、direct/teaching 共享预算、回答/每题 C1 隔离、空召回零调用、general 伪造引用、生成期间解绑/同版本覆盖/新增绑定、人工与提案引用、HTTP/SSE、单次规划读取、SQLite 重开/旧 schema 与来源删除降级；没有逐字段拆测试。
+- 验证：`npm.cmd run ci` 通过 98 个 Python、19 个 Node 测试及文档/仓库/Action、Python import 边界检查；`eval:offline` 为20/20；`demo:fixture`、`demo:learning-agent`、`smoke:fixture` 全部 exit 0。TestClient httpx 弃用提示、关闭测试的预期 graceful timeout/CancelledError 和 smoke 终端中文乱码仍存在，不影响上述退出结果。无供应商 Key，真实模型 smoke/demo 未运行。
+- 失败与修复：首轮92项 Python 回归有1项 demo fixture 失败，因候选未选择真实来源 ID；更新 fixture 和旧 general 断言后全套98项通过。专项首次执行缺 task_ref，修正后6项通过；定向 uv 命令曾遇缓存权限，经批准执行。当前成功结果包含最后的审查修复。
+- 文档：同步 README 接口/模式、架构与技术债，补 history 索引和产物引用作用域学习速记；`npm.cmd run check:docs` 与 `git diff --check` 通过。总目标保持 active，本切片不代表 P0/P1/M5 已全部验收。
+
 ## 资料上传与检索 HTTP 切片（已完成）
 
 - 范围：UTF-8 TXT/Markdown、文本型 PDF；服务端 ID、10MB/100页/200000字符限额；原文件保存到 SQLite BLOB，异步解析状态与有界工作线程，PDF 在可终止子进程中解析；重启恢复 interrupted，原文件 reparse，ready 不重复解析。

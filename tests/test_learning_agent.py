@@ -238,7 +238,7 @@ def test_learning_agent_demo_refuses_existing_database():
         assert "资料不足" in result["empty_retrieval"]["final_text"]
         generated = result["exercise_generation"]
         assert len(generated["button"]["exercises"]) == len(generated["teaching"]["exercises"]) == 1
-        assert generated["button"]["source_mode"] == "general"
+        assert generated["button"]["source_mode"] == "documents"
         for entry in (generated["button"], generated["teaching"]):
             assert "correct_option_id" not in json.dumps(entry)
         assert generated["feedback"]["attempt"]["counted"] is True

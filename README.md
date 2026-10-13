@@ -2,7 +2,7 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料上传/PDF 解析、中文 BM25 检索、回答引用和结构化练习生成。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
+当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson 的最小 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料上传/PDF 解析、中文 BM25 检索、回答引用和资料型图谱/练习生成。React、完整业务 HTTP/SQLite、真实模型 smoke 和 M5 评估交接仍按 docs/exec-plans/active/learngraph-lite-implementation.md 推进。
 
 ## 开发准备
 
@@ -138,7 +138,7 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 
 上传返回 202，状态依次为 uploaded、parsing，终态为 ready/failed/unsupported。扫描 PDF 为 unsupported/needs_ocr；加密、坏 PDF、坏编码和不可读文本也明确拒绝，不支持 OCR、Office 文件。重启把未完成解析标为 failed/interrupted；`POST /api/documents/{id}/reparse` 复用原文件，ready 时返回已有结果。解析成功状态与全文/chunk/FTS 在同一事务提交，只有 ready 上传可检索。
 
-`DELETE /api/goals/{goal_id}/document-bindings` 使用相同 JSON body 解绑；解绑目标也移除它的节点绑定。`DELETE /api/documents/{id}` 删除原文件、索引及所有绑定，晚到解析结果不会恢复已删除资料，历史回答来源降级为 unavailable。chunk 接口每页最多 50 块，返回页码或 heading、原文 offsets 和 SHA256；节点 Agent 复用这些资料与本轮 C1 来源表。资料型图谱/练习/学习页 grounding 仍待实现。
+`DELETE /api/goals/{goal_id}/document-bindings` 使用相同 JSON body 解绑；解绑目标也移除它的节点绑定。`DELETE /api/documents/{id}` 删除原文件、索引及所有绑定，晚到解析结果不会恢复已删除资料，历史来源点击降级为 unavailable。chunk 接口每页最多 50 块，返回页码或 heading、原文 offsets 和 SHA256；节点 Agent、图谱和练习复用这些资料，各自保存来源表。资料型学习页 grounding 和 React 原文页仍待实现。
 
 启动必须有 SQLite FTS5。若报错 `SQLite FTS5 is required`，安装 Python 3.13+ 的官方发行版（含 FTS5）并用该解释器重新创建项目虚拟环境、执行 `uv sync --locked --group dev`；可用 `uv run --locked python -c "import sqlite3; sqlite3.connect(':memory:').execute('create virtual table probe using fts5(text)'); print('FTS5 OK')"` 验证。当前解析恢复按单个 API 进程使用同一数据库设计。
 
@@ -158,12 +158,15 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 | GET /api/goals/{goal_id}/graph | 当前规划状态，与目标 GET 相同结构 |
 | PATCH /api/goals/{goal_id}/graph | `{"expected_version":4,"nodes":[...],"edges":[...]}`，提交完整草稿，可增删改 |
 | POST /api/goals/{goal_id}/graph/publish | `{"expected_version":5,"expected_revision":0}`，发布并初始化学习快照 |
+| GET /api/goals/{goal_id}/graph/citations/{citation_id}?version={version} | 使用当前规划 version 定位图谱原文；版本变化返回 409，需刷新图谱 |
 
 表中版本号示例按各步成功写入递增。节点要求 id、title、explanation、learning_outcome、正整数 estimated_minutes 和 0–5 priority；依赖只允许 prerequisite，source 为 target 的前置，拒绝环、自环、未知节点和重复边。结构化候选至多修复一次，模型调用/修复共享 run 预算；run 输出保存本次提交快照。推荐仍先考虑近期答错，再按优先级、预计分钟与 ID 排序。
 
 规划任务内部按目标串行，共用全应用两并发和取消规则；公开 run 的 `task_ref` 为 `goal:{goal_id}`，不需要节点或 session_id。查询、SSE、取消与相同请求去重沿用 run API。版本过期或发布后直接覆盖返回 409，无效 body/图谱返回 422。目标 PATCH 至少包含一个字段；仅 time_budget_minutes 可用 null 清空，title 必须非空，其余文本/列表可用空字符串或空列表清空。
 
-当前模型图谱仅返回 `source_mode: general`，即非基于上传资料；目标含 document_ids 或已有资料绑定时拒绝生成，返回 grounding_unavailable。HTTP/模型不能覆盖已发布路线，后续修改需走已有离线提案用例（提案 HTTP 待接）。内部兼容方法 update_node/add_dependency 仍可把发布快照转回草稿，不能视为公开产品入口。
+图谱按显式目标绑定检索；无绑定时 `source_mode: general`，即非基于上传资料。有绑定时最多检索五块、每块320字符，实际片段进入模型上下文，标 `documents`，每节点必须选择本次来源的 `citation_ids`；有绑定但空召回时明确失败，不调用模型。目标声明的 document_ids 未完成绑定时仍返回 grounding_unavailable。run 的 `output.planning.graph.citation_map` 与当前图谱保存来源表，发布保留来源；人工编辑或接受提案保留原文定位、标 `edited`，修改后的内容不继承资料生成声明。未知、重复或正文未列入 citation_ids 的引用拒绝保存。
+
+图谱 GET 动态更新来源 valid/stale/unavailable；定位使用当前 planning version，当前仅持久化一份图谱快照，旧 version 返回 409。HTTP/模型不能覆盖已发布路线，后续修改需走已有离线提案用例（提案 HTTP 待接）。内部兼容方法 update_node/add_dependency 仍可把发布快照转回草稿，不能视为公开产品入口。
 
 目标、问题和图谱可从 SQLite 重启恢复，旧快照启动时补默认字段；run/root/去重仍仅在进程内。未提交失败可用新 request_id 和 retry_of_run_id 重试；取消与提交存在窄窗口，取消后先 GET 最新规划，版本改变时需重新审核并创建新任务，不能盲用旧版本重试。发布与学习初始化分属两次仓库写入，进程中断可能留下已发布但未初始化的状态；当前会拒绝节点上下文，尚无自动恢复/成绩迁移协议。
 
@@ -173,9 +176,11 @@ real API 的按钮出题入口是 `POST /api/goals/{goal_id}/nodes/{node_id}/exe
 
 `GET` 同一节点 exercises 路径列出当前内容版本题目；`GET /api/goals/{goal_id}/exercises/{exercise_id}` 读取公共题目。提交 `POST /api/goals/{goal_id}/exercises/{exercise_id}/attempts`，body 为 `{"submission_id":"answer-1","selected_option_id":"b"}`。题目、工具结果、run 与 SSE 不包含正式答案/解析；提交反馈才返回。重复 submission 同输入返回原结果，不同输入返回 409；同题仅首次作答计入掌握度，旧版本拒绝作答。
 
-主循环、工具内生成和至多一次 JSON 修复共用每 run 六次模型调用上限与 usage。候选整批校验通过才原子保存。练习当前标记 `source_mode: general`，即非基于上传资料。失败/取消/预算耗尽后，用新 request ID 和 `retry_of_run_id` 显式重试，保留原 session、输入和 root task；已经保存的批次按稳定 operation key 复用。省略 retry 字段表示新任务，可生成新题；完全重复题拒绝保存。
+主循环、工具内生成和至多一次 JSON 修复共用每 run 六次模型调用上限与 usage。候选整批校验通过才原子保存。练习只检索显式节点绑定的资料，目标绑定不会自动继承；无节点绑定时标 `source_mode: general`，有绑定时实际片段进入生成上下文，每题标 `documents` 并保存 citation_ids/citation_map。有绑定但空召回明确失败；repair 使用原来源表，保存前重查绑定和原文内容。失败/取消/预算耗尽后，用新 request ID 和 `retry_of_run_id` 显式重试，保留原 session、输入和 root task；已经保存的批次按稳定 operation key 复用。省略 retry 字段表示新任务，可生成新题；完全重复题拒绝保存。
 
-operation 与题目持久化于 SQLite；run/root 关联仍仅在当前进程可查询，重启后不能用旧 run ID 重试。当前只有调用次数/步骤/工具次数和协作取消限制，完整 token/context/deadline 预算、资料型题目 grounding 和跨 planning/learning 事务仍待完成。
+`GET /api/goals/{goal_id}/exercises/{exercise_id}/citations/{citation_id}` 定位该题原文。题目 GET 动态返回来源状态与 unverified_citation_ids，解绑/删除/内容变化后定位返回 409，未知编号返回 404。图谱、每题与回答的 C1 分别属于各自产物，不能用回答的 output.citation_map 定位题目引用。程序只校验来源存在、绑定、版本/hash/位置；引用是否支持内容仍需语义评估，尚无真实模型验证。
+
+operation 与题目（含来源表）持久化于 SQLite；run/root 关联仍仅在当前进程可查询，重启后不能用旧 run ID 重试。当前只有调用次数/步骤/工具次数和协作取消限制，完整 token/context/deadline 预算及跨 planning/learning/document 事务仍待完成。
 
 ## 常用命令
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from .graph import GraphDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus, GraphValidationError, validate_graph
+from .graph import GraphDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus, GraphValidationError, validate_graph, validate_node_citations
 
 
 class ProposalStatus(StrEnum):
@@ -117,7 +117,8 @@ def apply_operations(graph: GraphSnapshot, operations: tuple[GraphOperation, ...
             raise ValueError(f"unsupported operation: {operation.kind}")
 
     if validate:
-        errors = validate_graph(GraphDraft(nodes=tuple(nodes), edges=tuple(edges)))
+        errors = (validate_graph(GraphDraft(nodes=tuple(nodes), edges=tuple(edges)))
+                  + validate_node_citations(tuple(nodes), graph.citation_map))
         if errors:
             raise GraphValidationError(errors)
     return GraphSnapshot(
@@ -127,4 +128,6 @@ def apply_operations(graph: GraphSnapshot, operations: tuple[GraphOperation, ...
         status=GraphStatus.PUBLISHED,
         revision=graph.revision + 1,
         content_revision=graph.content_revision + 1,
+        source_mode="edited" if graph.citation_map else "general",
+        citation_map=graph.citation_map,
     )

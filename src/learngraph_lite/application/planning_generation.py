@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from learngraph_lite.agent_core import TextMessage
 from learngraph_lite.agent_core.gateway import BudgetedModelGateway
 from learngraph_lite.application.documents import DocumentRepository
+from learngraph_lite.application.generation_sources import GenerationSources
 from learngraph_lite.application.planning import PlanningError, PlanningService
 from learngraph_lite.domain.learning import GraphDraft, GraphEdge, GraphNode, GraphStatus, clarification_questions
 from learngraph_lite.domain.learning.graph import validate_graph
@@ -27,6 +28,7 @@ class CandidateNode(BaseModel):
     learning_outcome: Text
     estimated_minutes: int = Field(ge=1, le=10080)
     priority: int = Field(ge=0, le=5)
+    citation_ids: list[NodeId] = Field(default_factory=list, max_length=5)
 
 
 class CandidateEdge(BaseModel):
@@ -42,7 +44,7 @@ class CandidateGraph(BaseModel):
     edges: list[CandidateEdge] = Field(max_length=435)
 
     def graph(self) -> GraphDraft:
-        graph = GraphDraft(tuple(GraphNode(**node.model_dump()) for node in self.nodes),
+        graph = GraphDraft(tuple(GraphNode(**{**node.model_dump(), "citation_ids": tuple(node.citation_ids)}) for node in self.nodes),
                            tuple(GraphEdge(**edge.model_dump()) for edge in self.edges))
         errors = validate_graph(graph)
         if errors:
@@ -103,8 +105,9 @@ class GeneratePlanning:
                 raise PlanningError("goal_unconfirmed", "Confirm the goal before graph generation.")
             if state.graph is not None and state.graph.status == GraphStatus.PUBLISHED:
                 raise PlanningError("graph_published", "Published routes must be changed through proposals.")
-            if state.goal.document_ids or (self._documents is not None and self._documents.bound_document_ids(goal_id)):
-                raise PlanningError("grounding_unavailable", "Document-grounded graph generation is not implemented yet.")
+            bindings = self._documents.bound_document_ids(goal_id) if self._documents is not None else set()
+            if not set(state.goal.document_ids).issubset(bindings):
+                raise PlanningError("grounding_unavailable", "Bind the goal's document_ids before document-grounded generation.")
         return state
 
     def clarify(self, goal_id: str, version: int, model: BudgetedModelGateway) -> dict:
@@ -129,20 +132,29 @@ class GeneratePlanning:
         state = self.validate(goal_id, "graph", version)
         if type(count) is not int or not 1 <= count <= 30:
             raise PlanningError("invalid_node_count", "Node count must be between 1 and 30.")
+        sources = GenerationSources(self._documents, goal_id, None,
+                                    state.goal.title + " " + state.goal.desired_outcome)
 
         def validate(candidate):
             graph = candidate.graph()
             if len(graph.nodes) != count:
                 raise ValueError("wrong node count")
+            for node in candidate.nodes:
+                sources.validate(node.citation_ids, (node.title, node.explanation, node.learning_outcome))
             return graph
 
         graph = _candidate(model, CandidateGraph, "生成小型学习依赖图。每节点含解释、学习结果、正整数预计分钟和优先级"
                            "（0最低、5最高）。只使用 prerequisite，source 是 target 的前置。不得生成环。"
-                           "这是非基于上传资料的普通知识路线，不编造引用。",
-                           {"goal": asdict(state.goal), "node_count": count}, validate)
+                           + sources.instruction,
+                           {"goal": asdict(state.goal), "node_count": count, "sources": sources.sources}, validate)
         # Recheck bindings too; planning version protects all goal and graph edits in the commit below.
         self.validate(goal_id, "graph", version)
+        def before_save():
+            model.budget.check_step(0)
+            sources.check_current()
+        citation_map = sources.citation_map({key for node in graph.nodes for key in node.citation_ids})
         saved = self._planning.save_graph_draft(goal_id, graph.nodes, graph.edges, expected_version=version,
-                                               before_save=lambda: model.budget.check_step(0))
+                                               before_save=before_save, source_mode=sources.source_mode,
+                                               citation_map=citation_map)
         snapshot = replace(state, graph=saved, version=version + 1)
-        return {"planning": {"goal_id": goal_id, **asdict(snapshot)}, "source_mode": "general"}
+        return {"planning": {"goal_id": goal_id, **asdict(snapshot)}, "source_mode": sources.source_mode}

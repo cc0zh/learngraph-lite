@@ -24,7 +24,7 @@ LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前已�
     infrastructure -> application/domain/agent_core 的端口或协议
     bootstrap -> presentation/application/infrastructure
 
-当前 SQLite 持久化边界：已覆盖 M2 planning state 的 `save/get/create/list_ids/mutate` repository port，包含独立 version、澄清轮次/问题和图谱快照；M4A document repository 的原始 BLOB/解析状态/文本/chunk/绑定/引用定位/FTS5 检索；M3 learning repository 的学习图谱/私有练习/作答/节点学习请求幂等结果；以及 M4B lesson repository 的 package、事件 ACK、解释 run 与失败重试最小状态。planning 启动时补旧表缺失列，旧节点可读取默认新增字段；document 启动补 hash/heading 列并在分词版本标记变化时重建索引。它没有引入 ORM、迁移工具或 P1 全量业务表，也不覆盖完整运行生命周期、React 或完整 schema 迁移。
+当前 SQLite 持久化边界：已覆盖 M2 planning state 的 `save/get/create/list_ids/mutate` repository port，包含独立 version、澄清轮次/问题和图谱快照；M4A document repository 的原始 BLOB/解析状态/文本/chunk/绑定/引用定位/FTS5 检索；M3 learning repository 的学习图谱/私有练习/作答/节点学习请求幂等结果；以及 M4B lesson repository 的 package、事件 ACK、解释 run 与失败重试最小状态。planning 启动时补旧表缺失列，旧节点/图谱可读取默认新增字段；learning 启动补 exercise 的 sources_json，空旧 metadata 默认 general，保存每题的来源模式、引用 IDs 与表；document 启动补 hash/heading 列并在分词版本标记变化时重建索引。它没有引入 ORM、迁移工具或 P1 全量业务表，也不覆盖完整运行生命周期、React 或完整 schema 迁移。
 
 当前离线检查覆盖：
 
@@ -58,7 +58,7 @@ SSE 原子捕获运行快照与事件序号，从该序号后等待新事件；�
 
 Uvicorn 先等待 HTTP/SSE 连接结束才触发 lifespan shutdown，本地启动命令设置 2 秒 graceful shutdown，避免活跃 SSE 无限挡住生命周期关闭。其他启动器也需设置有限的连接关闭等待时间。随后 lifespan 会停止准入、取消活动 run 并等待工作线程退出；同步阻塞模型/工具必须自行设置有限超时，Python 线程无法强行打断供应商调用。
 
-此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配目标澄清/普通知识图谱规划、planning/learning/document 场景、资料上传/解析/绑定/搜索和练习生成/作答；资料型生成、学习页/提案 HTTP 与 React 继续按总计划实施。
+此 HTTP 切片的 run/事件/请求去重及 session 作用域保存在进程内存中；不覆盖完整 session 业务、历史对话、run 重启恢复或 token streaming。真实入口已装配目标澄清/图谱规划、planning/learning/document 场景、资料上传/解析/绑定/搜索、资料型图谱/练习生成与作答；学习页 grounding/HTTP、提案 HTTP 与 React 继续按总计划实施。
 
 ## 资料导入与解析
 
@@ -68,16 +68,18 @@ SQLite 状态按 uploaded→parsing→ready/failed/unsupported 转移。启动�
 
 Markdown 按 ATX 标题切块并忽略代码围栏，PDF 按显式页码标记切块；chunk 保存原文精确 offsets、heading/page_number 和文本 SHA256。jieba search 分词用于索引和查询，参数化 MATCH 词表达式，SQL BM25 排序与 top5 限额，每块默认最多 320 字符；分值不是置信度。非 ready 上传排除检索，旧 upload_text 文本入口兼容保留。FTS5 不可用时启动失败并给出安装提示。
 
-上传 HTTP 仅接收 multipart bytes；绑定/搜索在应用层检查目标/节点存在，节点绑定需先绑定目标。SQLite 绑定校验和写入持有同一写事务，避免删除/解绑之间留下孤立绑定。删除同时移除原文件、文本、索引和所有绑定，历史来源点击降级；图谱/练习/学习页 grounding 和 React 原文查看器仍待后续。
+上传 HTTP 仅接收 multipart bytes；绑定/搜索在应用层检查目标/节点存在，节点绑定需先绑定目标。SQLite 绑定校验和写入持有同一写事务，避免删除/解绑之间留下孤立绑定。删除同时移除原文件、文本、索引和所有绑定，历史来源点击降级；学习页 grounding 和 React 原文查看器仍待后续。
 
 `BudgetedModelGateway` 位于通用内核，为一次 run 的所有模型请求计数并累积 usage。Runner 复用同一包装器，教学工具和直接生成用例使用父 run 的 gateway；包装器禁止切换预算，避免重复计数。默认模型调用上限六次，JSON 修复最多一次且计入次数。当前尚无 token/context/deadline 控制；供应商网络 timeout 不等于 run deadline。
 
 `GenerateExercise` 位于 application：请求结构化候选，经严格 schema 和现有领域规则校验，生成服务端题目 ID，再通过 learning repository `mutate` 原子保存整批私有题目和 operation。模型调用在事务外，保存前重读规划版本，事务内检查最新学习图谱、取消和重复题。SQLite 使用 `BEGIN IMMEDIATE` 与 `learning_generation_operations` 的 `(goal_id, operation_key)` 主键；首次作答和 submission 去重也在同一学习事务完成。planning/learning 分别读取仍留下并发规划变更的窄窗口，后续需统一同步协议。
 
-按钮 `mode=exercise` 走 Loop direct handler；教学 `mode=teaching` 注册闭包绑定节点的 `create_exercise`，调用相同用例。operation key 使用 root task、操作类型、节点、内容版本和固定 purpose slot；count/purpose 属于 fingerprint，同键不同参数冲突。失败任务显式 retry 创建新 run 并保留 root；新任务创建新 root。私有候选及修复对话不回注教学 transcript，ToolResult/公共 DTO 只含公共题目，提交反馈才返回答案。当前练习来源标记 general，不宣称资料 grounding；生成 registry 可重读恢复，但 root/run 关联仍未持久化。
+按钮 `mode=exercise` 走 Loop direct handler；教学 `mode=teaching` 注册闭包绑定节点的 `create_exercise`，调用相同用例。operation key 使用 root task、操作类型、节点、内容版本和固定 purpose slot；count/purpose 属于 fingerprint，同键不同参数冲突。失败任务显式 retry 创建新 run 并保留 root；新任务创建新 root。私有候选及修复对话不回注教学 transcript，ToolResult/公共 DTO 只含公共题目及其来源表，提交反馈才返回答案。每题和回答的 C1 独立，题目来源不能并入回答表；生成 registry 可重读恢复，但 root/run 关联仍未持久化。
 
 `GeneratePlanning` 复用 Loop direct handler、共享 BudgetedModelGateway 与严格 Pydantic 候选。澄清只对缺失字段提问，最多两轮；图谱默认十节点，包含解释、学习结果与优先级，校验依赖和环，只保存 draft。模型调用在事务外，提交通过 planning repository `mutate` 在锁内或 SQLite `BEGIN IMMEDIATE` 中核对 expected_version、业务状态与取消；成功递增 version，失败回滚。run 输出取本次保存的快照，避免再次读取混入后续编辑。
 
 planning version 覆盖目标/问题/草稿的每次写入，graph revision/content_revision 则沿用领域发布/提案语义。发布同时核对 planning version 与 graph revision；HTTP/模型拒绝覆盖 published，内部旧 update_node/add_dependency 仍保留转回 draft 的兼容行为。real HTTP 首次发布后调用 start_goal 初始化学习快照，两次写入并非跨仓库原子事务；中间退出会导致节点上下文拒绝未初始化状态，尚无恢复/迁移协议。
 
-图谱生成只支持 general；有目标 document_ids 或 repository 资料绑定时拒绝，以免伪造 grounding。保存前重查资料绑定，但绑定与 planning 不是同一事务，仍有并发绑定窄窗口。规划未保存失败可保留 root 显式 retry；没有持久 generation operation，提交后取消需先读取最新规划并重新审核版本。真实模型输出空间与生成质量仍待供应商验证。
+`GenerationSources` 为图谱/练习复用 DocumentTurn 的有界检索与服务端编号：图谱只查目标绑定，练习只查显式节点绑定；query 截至500字符，top5、每块320字符，总片段最多1600字符。无绑定标 general；有绑定且空召回不调用模型，明确失败。实际片段进入生成上下文，候选只能选择此次引用 ID，documents 模式每项至少一个；正文标记必须列入该项 IDs，未知/重复引用拒绝。repair 共用同一来源表。保存前复验绑定集合和文档版本/hash/offset，但 document 与 planning/learning 不是同一事务，仍有并发变更窄窗口。
+
+图谱快照和每题分别持久来源表，发布保留图谱来源；人工修改/提案保留表、标 edited（无表为 general），不继承生成来源声明，同时校验引用 IDs 与正文标记。图谱 GET 从单份规划快照投影来源当前状态；图谱定位接口核对 planning version，旧版本返回409，当前没有图谱历史仓库。每题定位由 exercise_id 决定作用域，公共题目与幂等复用动态投影来源状态。未知引用404，解绑/删除/内容过期409；程序校验不证明原文语义支持。规划未保存失败可保留 root 显式 retry；没有持久 generation operation，提交后取消需先读取最新规划并重新审核版本。真实模型输出空间与生成质量仍待供应商验证。

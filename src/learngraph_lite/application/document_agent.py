@@ -44,7 +44,7 @@ def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def locate_source(documents: DocumentService, goal_id: str, node_id: str, source: dict) -> DocumentChunk:
+def locate_source(documents: DocumentService, goal_id: str, node_id: str | None, source: dict) -> DocumentChunk:
     citation = Citation(**{key: source[key] for key in Citation.__dataclass_fields__})
     chunk = documents.locate_bound(goal_id, node_id, citation)
     # Older upload callers can replace content without incrementing version.
@@ -53,10 +53,28 @@ def locate_source(documents: DocumentService, goal_id: str, node_id: str, source
     return chunk
 
 
+def project_sources(documents: DocumentService | None, goal_id: str, node_id: str | None,
+                    sources: dict[str, dict], used: set[str]) -> dict:
+    citation_map = {}
+    invalid = used - sources.keys()
+    for citation_id, source in sources.items():
+        try:
+            if documents is None:
+                raise DocumentAccessError("source_unavailable", "Document retrieval is not configured.")
+            locate_source(documents, goal_id, node_id, source)
+            status = "valid"
+        except DocumentAccessError as exc:
+            status = "unavailable" if exc.code == "source_unavailable" else "stale"
+            if citation_id in used:
+                invalid.add(citation_id)
+        citation_map[citation_id] = {**source, "status": status, "cited": citation_id in used}
+    return {"citation_map": citation_map, "unverified_citation_ids": sorted(invalid)}
+
+
 class DocumentTurn:
     """One source table for all document calls in a single answer."""
 
-    def __init__(self, documents: DocumentService, goal_id: str, node_id: str):
+    def __init__(self, documents: DocumentService, goal_id: str, node_id: str | None):
         self._documents = documents
         self._goal_id, self._node_id = goal_id, node_id
         self._sources: dict[str, dict] = {}
@@ -102,15 +120,4 @@ class DocumentTurn:
 
     def project_output(self, final_text: str) -> dict:
         used = set(re.findall(r"\[(C[0-9]+)\]", final_text))
-        citation_map = {}
-        invalid = used - self._sources.keys()
-        for citation_id, source in self._sources.items():
-            try:
-                locate_source(self._documents, self._goal_id, self._node_id, source)
-                status = "valid"
-            except DocumentAccessError as exc:
-                status = "unavailable" if exc.code == "source_unavailable" else "stale"
-                if citation_id in used:
-                    invalid.add(citation_id)
-            citation_map[citation_id] = {**source, "status": status, "cited": citation_id in used}
-        return {"citation_map": citation_map, "unverified_citation_ids": sorted(invalid)}
+        return project_sources(self._documents, self._goal_id, self._node_id, self._sources, used)

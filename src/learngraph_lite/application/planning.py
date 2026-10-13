@@ -19,6 +19,7 @@ from learngraph_lite.domain.learning import (
     confirm_goal,
     publish_graph,
 )
+from learngraph_lite.domain.learning.graph import validate_node_citations
 
 T = TypeVar("T")
 
@@ -174,7 +175,8 @@ class PlanningService:
 
     def save_graph_draft(self, goal_id: str, nodes: tuple[GraphNode, ...], edges: tuple[GraphEdge, ...],
                          expected_version: int | None = None, before_save: Callable[[], None] | None = None,
-                         *, allow_published: bool = False) -> GraphSnapshot:
+                         *, allow_published: bool = False, source_mode: str = "general",
+                         citation_map: dict | None = None) -> GraphSnapshot:
         def update(state):
             self.check_version(state, expected_version)
             if not allow_published:
@@ -184,9 +186,16 @@ class PlanningService:
             if before_save is not None:
                 before_save()
             previous = state.graph
+            # Keep the source table when editing, but do not inherit the generation claim.
+            sources = citation_map if citation_map is not None else (previous.citation_map if previous else {})
+            errors = validate_node_citations(nodes, sources)
+            if errors:
+                raise PlanningError("invalid_graph_citations", "; ".join(errors))
+            mode = source_mode if citation_map is not None else ("edited" if sources else "general")
             state.graph = GraphSnapshot(goal_id, nodes, edges, GraphStatus.DRAFT,
                                         previous.revision if previous else 0,
-                                        previous.content_revision if previous else 0)
+                                        previous.content_revision if previous else 0,
+                                        mode, sources)
             return state.graph
         return self._mutate(goal_id, update)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 
@@ -25,6 +25,9 @@ class ExercisePrivate:
     correct_option_id: str
     explanation: str
     normalized_hash: str
+    source_mode: str = "general"
+    citation_ids: tuple[str, ...] = ()
+    citation_map: dict[str, dict] = field(default_factory=dict)
 
     def to_public(self) -> "ExercisePublic":
         return ExercisePublic(
@@ -34,6 +37,9 @@ class ExercisePrivate:
             graph_content_revision=self.graph_content_revision,
             prompt=self.prompt,
             options=self.options,
+            source_mode=self.source_mode,
+            citation_ids=self.citation_ids,
+            citation_map=self.citation_map,
         )
 
 
@@ -45,6 +51,9 @@ class ExercisePublic:
     graph_content_revision: int
     prompt: str
     options: tuple[ExerciseOption, ...]
+    source_mode: str = "general"
+    citation_ids: tuple[str, ...] = ()
+    citation_map: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

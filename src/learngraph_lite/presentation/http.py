@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, Callable, Literal
 from uuid import uuid4
@@ -73,6 +74,10 @@ class PublicExercise(BaseModel):
     graph_content_revision: int
     prompt: str
     options: list[PublicOption]
+    source_mode: Literal["general", "documents"] = "general"
+    citation_ids: list[str] = Field(default_factory=list)
+    citation_map: dict[str, AnswerSource] = Field(default_factory=dict)
+    unverified_citation_ids: list[str] = Field(default_factory=list)
 
 
 class PlanningView(BaseModel):
@@ -140,7 +145,7 @@ class AnswerSources(BaseModel):
     citation_map: dict[str, AnswerSource] = Field(default_factory=dict)
     unverified_citation_ids: list[str] = Field(default_factory=list)
     exercises: list[PublicExercise] | None = None
-    source_mode: Literal["general"] | None = None
+    source_mode: Literal["general", "documents"] | None = None
     planning: PlanningView | None = None
 
 
@@ -299,6 +304,7 @@ def create_app(
     @app.exception_handler(DocumentAccessError)
     async def document_error(request: Request, exc: DocumentAccessError):
         statuses = {"document_not_found": 404, "node_not_found": 404, "upload_too_large": 413,
+                    "source_not_found": 404,
                     "invalid_document_request": 422, "document_capacity_exceeded": 429, "shutting_down": 503}
         return _error(statuses.get(exc.code, 409), exc.code, str(exc),
                       retryable=exc.code in {"document_capacity_exceeded", "shutting_down"})
@@ -404,7 +410,11 @@ def create_app(
 
         @app.get("/api/goals/{goal_id}/graph", response_model=PlanningView)
         def get_graph(goal_id: Identifier):
-            return planning.describe(goal_id)
+            state = planning.get_state(goal_id)
+            data = {"goal_id": goal_id, **asdict(state)}
+            if learning_context is not None and state.graph is not None:
+                data["graph"] = learning_context.project_graph_sources(state.graph)
+            return data
 
         @app.patch("/api/goals/{goal_id}/graph", response_model=PlanningView)
         def edit_graph(goal_id: Identifier, body: EditGraph):
@@ -446,6 +456,30 @@ def create_app(
             return exercises.submit_answer(goal_id, exercise_id, body.selected_option_id, body.submission_id)
 
     if learning_context is not None:
+        def located(goal_id, node_id, source):
+            chunk = learning_context.locate_run_source(goal_id, node_id, source)
+            return {"source": {**source, "status": "valid"}, "text": chunk["text"],
+                    "start_offset": chunk["start_offset"], "end_offset": chunk["end_offset"],
+                    "page_number": chunk["page_number"], "heading": chunk["heading"]}
+
+        if planning is not None:
+            @app.get("/api/goals/{goal_id}/graph/citations/{citation_id}", response_model=LocatedSource)
+            def locate_graph_citation(goal_id: Identifier, citation_id: Identifier,
+                                      version: Annotated[int, Query(ge=0)]):
+                state = planning.get_state(goal_id)
+                if state.version != version:
+                    return _error(409, "stale_graph_citation", "Graph version changed; refresh the artifact.")
+                source = state.graph.citation_map.get(citation_id) if state.graph is not None else None
+                if source is None:
+                    return _error(404, "source_not_found", "Citation does not exist in this graph version.")
+                return located(goal_id, None, source)
+
+        if exercises is not None:
+            @app.get("/api/goals/{goal_id}/exercises/{exercise_id}/citations/{citation_id}", response_model=LocatedSource)
+            def locate_exercise_citation(goal_id: Identifier, exercise_id: Identifier, citation_id: Identifier):
+                node_id, source = exercises.locate_citation(goal_id, exercise_id, citation_id)
+                return located(goal_id, node_id, source)
+
         @app.get("/api/goals/{goal_id}/nodes/{node_id}/context")
         def node_context(goal_id: Identifier, node_id: Identifier):
             return learning_context.context(goal_id, node_id)
@@ -463,12 +497,9 @@ def create_app(
             except KeyError:
                 return _error(404, "run_not_found", "Run does not exist.", run_id=run_id)
             source = record.output.get("citation_map", {}).get(citation_id)
-            if source is None or record.goal_id is None or record.node_id is None:
+            if source is None or record.goal_id is None:
                 return _error(404, "source_not_found", "Citation was not returned in this run.", run_id=run_id)
-            chunk = learning_context.locate_run_source(record.goal_id, record.node_id, source)
-            return {"source": {**source, "status": "valid"}, "text": chunk["text"],
-                    "start_offset": chunk["start_offset"], "end_offset": chunk["end_offset"],
-                    "page_number": chunk["page_number"], "heading": chunk["heading"]}
+            return located(record.goal_id, record.node_id, source)
 
     @app.get("/api/health")
     async def health():
