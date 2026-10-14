@@ -42,6 +42,10 @@ class UploadRepository(DocumentRepository, Protocol):
 
     def get_upload(self, document_id: str) -> UploadRecord: ...
 
+    def list_uploads(self, offset: int, limit: int) -> tuple[tuple[UploadRecord, ...], int]: ...
+
+    def document_bindings(self, document_id: str) -> tuple[dict, ...]: ...
+
     def original_bytes(self, document_id: str) -> bytes: ...
 
     def transition_upload(self, document_id: str, expected: tuple[str, ...], status: str) -> bool: ...
@@ -89,6 +93,20 @@ class DocumentImports:
 
     def get(self, document_id: str) -> dict:
         return asdict(self._record(document_id))
+
+    def list(self, *, offset: int = 0, limit: int = 50) -> dict:
+        if offset < 0 or not 1 <= limit <= 50:
+            raise DocumentAccessError("invalid_document_request", "Invalid document page.")
+        records, total = self._repository.list_uploads(offset, limit)
+        return {"documents": [asdict(record) for record in records], "total": total, "offset": offset}
+
+    def bindings(self, document_id: str) -> dict:
+        self._record(document_id)
+        return {"bindings": list(self._repository.document_bindings(document_id))}
+
+    def bound(self, goal_id: str, node_id: str | None = None) -> dict:
+        self._scope(goal_id, node_id)
+        return {"document_ids": sorted(self._repository.bound_document_ids(goal_id, node_id))}
 
     def chunks(self, document_id: str, *, offset: int = 0, limit: int = 50) -> dict:
         self._ready(document_id)

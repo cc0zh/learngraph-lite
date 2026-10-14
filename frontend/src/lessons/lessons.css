@@ -1,0 +1,23 @@
+.lesson-panel { grid-column: 2 / -1; min-width: 0; }
+.lesson-panel *, .lesson-panel .exercise { min-width: 0; }
+.lesson-panel .lesson-header, .lesson-panel .lesson-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.lesson-panel .lesson-header { justify-content: space-between; }
+.lesson-panel select, .lesson-panel .lesson-actions label { max-width: 100%; }
+.lesson-panel select { display: block; }
+.lesson-panel .lesson-selection span, .learning-page .option span { overflow-wrap: anywhere; }
+.lesson-panel .lesson-run { overflow-wrap: anywhere; }
+.lesson-panel .lesson-block { border-top: 1px solid var(--border, #e2e8f0); padding: 16px 0; overflow-wrap: anywhere; }
+.lesson-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.lesson-panel .lesson-table { overflow-x: auto; max-width: 100%; }
+.lesson-panel table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.lesson-panel th, .lesson-panel td { padding: 10px; border: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+.lesson-panel .lesson-run { padding: 12px; margin-top: 12px; border-radius: 8px; background: #f8fafc; }
+.lesson-panel .run-status > span:nth-of-type(2) { display: none; }
+.lesson-panel .lesson-step { padding: 12px; background: #f8fafc; border-radius: 8px; margin-bottom: 12px; }
+.lesson-panel .lesson-selection { display: grid; gap: 8px; }
+.lesson-panel .lesson-selection label { display: flex; align-items: start; gap: 8px; }
+.lesson-panel .lesson-selection input { width: auto; flex-shrink: 0; }
+.lesson-panel .lesson-save { font-size: 12px; color: var(--muted); }
+.lesson-panel .lesson-sources { overflow-wrap: anywhere; }
+@media (max-width: 1100px) { .lesson-panel { grid-column: 2; } }
+@media (max-width: 767px) { .lesson-panel { grid-column: 1; } .learning-page .mobile-tabs { min-width: 0; } .learning-page .mobile-tabs button { min-width: 0; padding: 10px 8px; } }

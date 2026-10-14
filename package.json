@@ -28,6 +28,7 @@
     "smoke:fixture": "uv run --locked python scripts/run-fixture-smoke.py",
     "smoke:real": "uv run --locked python scripts/run-model-smoke.py",
     "smoke:p0:real": "uv run --locked python -X utf8 scripts/run-real-p0-smoke.py",
+    "smoke:p0:browser:real": "node scripts/run-real-browser-smoke.cjs",
     "eval:offline": "uv run --locked python evals/run.py",
     "demo:fixture": "uv run --locked python scripts/run-fixture-demo.py",
     "demo:learning-agent": "uv run --locked python -X utf8 scripts/run-learning-agent-demo.py"

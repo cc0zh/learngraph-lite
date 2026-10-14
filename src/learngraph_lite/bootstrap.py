@@ -21,6 +21,8 @@ from learngraph_lite.application.learning import LearningRepository, LearningSer
 from learngraph_lite.application.learning_agent import LearningContext
 from learngraph_lite.application.planning import PlanningRepository, PlanningService
 from learngraph_lite.application.planning_generation import GeneratePlanning
+from learngraph_lite.application.proposals import GraphProposalService
+from learngraph_lite.application.proposal_generation import GenerateProposal
 
 
 def _load_dotenv() -> None:
@@ -83,8 +85,9 @@ def build_fixture_loop() -> AgentLoop:
 def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learning: LearningRepository,
                         documents: DocumentRepository | None = None,
                         lessons: LessonRepository | None = None,
-                        runs: RunRepository | None = None) -> AgentLoop:
-    context = LearningContext(planning, learning, documents, lessons)
+                        runs: RunRepository | None = None,
+                        proposals: GraphProposalService | None = None) -> AgentLoop:
+    context = LearningContext(planning, learning, documents, lessons, proposals)
     generator = GenerateExercise(learning, context.context, documents)
     planner = GeneratePlanning(PlanningService(planning), documents)
 
@@ -104,6 +107,10 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
         return DirectResult(f"练习已保存（{label}）。", result, dict(gateway.usage))
 
     def validate(request):
+        if request.mode == "proposal":
+            if proposals is None:
+                raise ValueError("Proposal generation is not configured.")
+            proposals.published(request.goal_id)
         if request.mode == "lesson" and lessons is None:
             raise ValueError("Lesson generation is not configured.")
         if request.mode in {"exercise", "lesson", "teaching", "explanation"}:
@@ -122,6 +129,15 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
             planner.validate(request.goal_id, request.mode, request.planning_version)
 
     handlers = {"exercise": generate, "clarify": plan, "graph": plan}
+    if proposals is not None:
+        proposal_generator = GenerateProposal(proposals)
+
+        def generate_proposal(request, budget, root_task_id):
+            gateway = budgeted(model, budget)
+            result = proposal_generator.generate(request.goal_id, root_task_id,
+                {"purpose": request.proposal_purpose}, gateway)
+            return DirectResult("图谱提案已保存，等待用户审核；当前路线尚未改变。", result, dict(gateway.usage))
+        handlers["proposal"] = generate_proposal
     if lessons is not None:
         lesson_generator = GenerateLesson(lessons, learning, context.context, documents)
 
@@ -190,6 +206,7 @@ def _create_business_app(gateway, mode: str, database):
     from learngraph_lite.infrastructure import SQLiteDocumentRepository, SQLiteLearningRepository, SQLiteLessonRepository, SQLitePlanningRepository
     from learngraph_lite.infrastructure.document_parser import SubprocessDocumentParser
     from learngraph_lite.infrastructure.run_persistence import SQLiteRunRepository
+    from learngraph_lite.infrastructure.proposal_persistence import SQLiteProposalRepository
 
     imports = None
     try:
@@ -199,13 +216,15 @@ def _create_business_app(gateway, mode: str, database):
         learning = SQLiteLearningRepository(database_path)
         documents = SQLiteDocumentRepository(database_path)
         lessons = SQLiteLessonRepository(database_path)
+        proposal_repository = SQLiteProposalRepository(database_path)
+        proposals = GraphProposalService(proposal_repository, proposal_repository, documents)
         learning_service = LearningService(learning)
         for item in PlanningService(planning).list_goals():
             state = planning.get(item["goal_id"])
             if state.graph is not None and state.graph.status.value == "published":
                 learning_service.ensure_goal(state.graph)
-        context = LearningContext(planning, learning, documents, lessons)
-        loop = build_learning_loop(gateway, planning, learning, documents, lessons, SQLiteRunRepository(database_path))
+        context = LearningContext(planning, learning, documents, lessons, proposals)
+        loop = build_learning_loop(gateway, planning, learning, documents, lessons, SQLiteRunRepository(database_path), proposals)
         imports = DocumentImports(documents, SubprocessDocumentParser(), PlanningService(planning))
         return create_app(loop, model_mode=mode, model_configured=mode == "real", on_close=gateway.close,
                           learning_context=context,
@@ -213,7 +232,7 @@ def _create_business_app(gateway, mode: str, database):
                           lessons=GenerateLesson(lessons, learning, context.context, documents),
                           lesson_events=LessonService(lessons, LearningService(learning), loop, context.context),
                           planning=PlanningService(planning), on_publish=learning_service.ensure_goal,
-                          document_imports=imports)
+                          document_imports=imports, proposals=proposals)
     except Exception:
         if imports is not None:
             imports.close()

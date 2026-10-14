@@ -1,5 +1,37 @@
 import { expect, learningGoal, runDTO, test } from './fixtures';
 
+for (const recovery of ['terminal-get-fails', 'terminal-found-by-query'] as const) {
+  test(`P0: ${recovery} reconciles native-tool artifacts without another POST`, async ({ page, request }) => {
+    const goal = await learningGoal(request);
+    let runId = '';
+    if (recovery === 'terminal-get-fails') {
+      let failed = false;
+      await page.route('**/api/runs/*', async route => {
+        if (!failed) { failed = true; await route.abort('failed'); }
+        else await route.continue();
+      });
+    } else {
+      await page.route('**/api/runs/*/events', route => route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' }));
+    }
+    page.on('response', async response => {
+      if (response.request().method() === 'POST' && response.url().includes('/sessions/') && response.status() === 202) runId = (await response.json()).run_id;
+    });
+    await page.goto(`/goals/${goal}/learn`);
+    await page.getByLabel('向当前节点提问').fill('请调用工具创建一道练习');
+    await page.getByRole('button', { name: '发送问题' }).click();
+    await expect.poll(() => runId).not.toBe('');
+    await expect.poll(async () => (await (await request.get(`/api/runs/${runId}`)).json()).status).toBe('completed');
+    const writes: string[] = [];
+    page.on('request', req => { if (req.method() === 'POST') writes.push(req.url()); });
+    if (recovery === 'terminal-get-fails') await expect(page.getByRole('alert').first()).toContainText('终态已收到');
+    await page.getByRole('button', { name: '查询运行状态', exact: true }).click();
+    await expect(page.locator('.assistant-message')).toContainText('后续问题会结合本会话');
+    await expect(page.locator('.practice-panel .exercise')).toHaveCount(1);
+    await expect(page.getByRole('button', { name: '生成练习', exact: true })).toBeEnabled();
+    expect(writes).toEqual([]);
+  });
+}
+
 test('P0: Markdown never renders images or sends external image requests', async ({ page, request, externalRequests }) => {
   const goal = await learningGoal(request);
   const markdown = `正常 Markdown **仍然可读**。
@@ -94,6 +126,8 @@ test('P0: recovery queries before resending, and a failed recovered run retries 
   const submissions: Record<string, unknown>[] = [];
   let allowQuery = false;
   await page.route('**/api/sessions/*/runs', async route => {
+    const matched = new URL(route.request().url()).pathname.match(/\/sessions\/([^/]+)\/runs$/);
+    if (!matched || decodeURIComponent(matched[1]) !== session) { await route.continue(); return; }
     if (route.request().method() !== 'POST') {
       if (allowQuery) await route.fulfill({ json: [] });
       else await route.abort('failed');
@@ -178,10 +212,12 @@ test('P0: long node scopes use a persisted bounded session for chat, exercises a
   const node = 'n'.repeat(128);
   const goal = await learningGoal(request, node);
   const sessionIds: string[] = [];
+  const submittedSessionIds: string[] = [];
   page.on('request', req => {
     const match = new URL(req.url()).pathname.match(/^\/api\/sessions\/([^/]+)\/runs$/);
     if (match) sessionIds.push(decodeURIComponent(match[1]));
-    if (req.method() === 'POST' && req.url().endsWith('/exercises')) sessionIds.push(req.postDataJSON().session_id);
+    if (match && req.method() === 'POST' && req.postDataJSON().mode === 'teaching') submittedSessionIds.push(decodeURIComponent(match[1]));
+    if (req.method() === 'POST' && req.url().endsWith('/exercises')) { sessionIds.push(req.postDataJSON().session_id); submittedSessionIds.push(req.postDataJSON().session_id); }
   });
   await page.goto(`/goals/${goal}/learn`);
   await expect(page.getByRole('heading', { name: '错误与恢复' })).toBeVisible();
@@ -193,10 +229,12 @@ test('P0: long node scopes use a persisted bounded session for chat, exercises a
   await page.reload();
   await expect(page.getByLabel('节点对话记录')).toContainText('合法最长节点 ID 仍能学习');
   await expect(page.getByRole('radio')).toHaveCount(3);
-  expect(sessionIds.length).toBeGreaterThanOrEqual(4);
-  expect(new Set(sessionIds).size).toBe(1);
-  expect(sessionIds[0]).toHaveLength(36);
-  expect(await page.evaluate(scope => localStorage.getItem(`learngraph:session:${scope}`), `learn:${goal}:${node}`)).toBe(sessionIds[0]);
+  const teachingSession = await page.evaluate(scope => localStorage.getItem(`learngraph:session:${scope}`), `learn:${goal}:${node}`);
+  expect(sessionIds.filter(id => id === teachingSession).length).toBeGreaterThanOrEqual(4);
+  expect(new Set(submittedSessionIds).size).toBe(1);
+  expect(submittedSessionIds[0]).toHaveLength(36);
+  expect(teachingSession).toBe(submittedSessionIds[0]);
+  expect(sessionIds.every(id => id.length <= 128)).toBe(true); // P1 has separate lesson/explanation/proposal sessions.
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 

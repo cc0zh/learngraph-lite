@@ -6,10 +6,15 @@ import '@xyflow/react/dist/style.css';
 import type { Graph, Run } from './types';
 import { terminal } from './api';
 import type { Command } from './useRuns';
+import { Citations } from './documents';
 
 const statusLabels: Record<string, string> = { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已停止', interrupted: '已中断', budget_exceeded: '已达预算上限' };
 export function ErrorBox({ error }: { error: string }) { return error ? <p className="error" role="alert">{error}</p> : null; }
 export function SafeMarkdown({ children }: { children: string }) { return <Markdown skipHtml disallowedElements={['img']}>{children}</Markdown>; }
+export function RunCitations({ run, goalId, nodeId }: { run: Run; goalId: string; nodeId?: string }) {
+  return <Citations citationMap={run.output?.citation_map || {}} unverifiedIds={run.output?.unverified_citation_ids}
+    endpoint={`/api/runs/${encodeURIComponent(run.run_id)}/citations/{citationId}`} goalId={goalId} nodeId={nodeId}/>;
+}
 export function PendingRequest({ command, checked, sending, query, resend }: { command?: Command; checked: boolean; sending: boolean; query: () => void; resend: () => void }) {
   if (!command) return null;
   return <div className="hint" role="region" aria-label="未确认请求恢复"><strong>请求尚未确认</strong>
@@ -38,9 +43,9 @@ export function RunStatus({ run, stop, retry, readOnly = false }: { run?: Run; s
   useEffect(() => { if (!live) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [live]);
   if (!run) return null;
   return <div className="run-status" role="status"><span className={!terminal(run.status) ? 'pulse' : ''}/><strong>{statusLabels[run.status] || run.status}</strong>
-    <span>{run.mode === 'graph' ? '生成路线' : run.mode === 'clarify' ? '澄清目标' : run.mode === 'exercise' ? '生成练习' : '节点对话'}</span>
+    <span>{{ graph: '生成路线', clarify: '澄清目标', exercise: '生成练习', lesson: '生成学习包', explanation: '组件解释', proposal: '生成路线调整提案', teaching: '节点对话' }[run.mode] || '任务'}</span>
     {live && <span>{Math.max(0, Math.floor((now - Date.parse(run.created_at)) / 1000))} 秒</span>}
-    {!readOnly && (!terminal(run.status) ? <button className="quiet" onClick={stop}>停止</button> : run.status !== 'completed' ? <button className="quiet" onClick={retry}>重试</button> : null)}
+    {!readOnly && (!terminal(run.status) ? <button className="quiet" onClick={stop}>停止</button> : run.status !== 'completed' ? <button className="quiet" onClick={() => retry()}>重试</button> : null)}
     {run.error && <p className="error">{run.error}</p>}
     {Object.values(run.tool_activity || {}).map(t => <div className="tool" key={t.call_id}>{t.name} · {statusLabels[t.status] || t.status}{t.elapsed_ms !== undefined && ` · ${t.elapsed_ms} ms`}</div>)}
     {run.status === 'cancelled' && <small>停止不会撤销已经保存的业务结果。</small>}

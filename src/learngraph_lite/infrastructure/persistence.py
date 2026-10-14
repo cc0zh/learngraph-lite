@@ -392,6 +392,23 @@ class SQLiteDocumentRepository:
             raise KeyError(document_id)
         return bytes(row[0])
 
+    def list_uploads(self, offset: int, limit: int) -> tuple[tuple[UploadRecord, ...], int]:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("begin")
+            total = connection.execute("select count(*) from document_uploads").fetchone()[0]
+            rows = connection.execute("""select document_id, filename, kind, status, size_bytes, content_hash,
+                revision, reason from document_uploads order by rowid desc limit ? offset ?""",
+                (limit, offset)).fetchall()
+        return tuple(UploadRecord(row[0], row[1], DocumentKind(row[2]) if row[2] else None, *row[3:])
+                     for row in rows), total
+
+    def document_bindings(self, document_id: str) -> tuple[dict, ...]:
+        with closing(self._connect()) as connection:
+            rows = connection.execute("""select goal_id, null as node_id from goal_document_bindings where document_id=?
+                union all select goal_id, node_id from node_document_bindings where document_id=?
+                order by goal_id, node_id""", (document_id, document_id)).fetchall()
+        return tuple({"goal_id": goal, "node_id": node} for goal, node in rows)
+
     def transition_upload(self, document_id: str, expected: tuple[str, ...], status: str) -> bool:
         placeholders = ','.join('?' for _ in expected)
         with closing(self._connect()) as connection, connection:

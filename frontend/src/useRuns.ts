@@ -18,6 +18,12 @@ export function useRuns(session: string, onComplete: () => void) {
   const queryVersion = useRef(0);
   const complete = useRef(onComplete);
   complete.current = onComplete;
+  const notified = useRef(new Set<string>());
+  const notifyTerminal = useCallback((records: Pick<Run, 'run_id' | 'status'>[]) => {
+    const fresh = records.filter(run => terminal(run.status) && !notified.current.has(run.run_id));
+    fresh.forEach(run => notified.current.add(run.run_id));
+    if (fresh.length) complete.current();
+  }, []);
   const active = runs.find(r => !terminal(r.status));
   const refresh = useCallback(async () => {
     const version = ++queryVersion.current;
@@ -26,10 +32,11 @@ export function useRuns(session: string, onComplete: () => void) {
       const history = await api<Run[]>(`/sessions/${session}/runs`);
       if (version !== queryVersion.current) return;
       setRuns(history); setError(''); setPendingChecked(!!pendingRef.current);
+      notifyTerminal(history);
       // PublicRun has no request_id. Never guess which run acknowledges a pending
       // command from its text; an explicit same-ID POST is the idempotent lookup.
     } catch (e) { if (version === queryVersion.current) setError(String(e)); }
-  }, [session]);
+  }, [session, notifyTerminal]);
   useEffect(() => { void refresh(); }, [refresh]);
   const activeId = active?.run_id;
   useEffect(() => {
@@ -40,7 +47,7 @@ export function useRuns(session: string, onComplete: () => void) {
       const run = JSON.parse(event.data).payload as Run;
       if (!pendingRef.current) setError('');
       update(run);
-      if (terminal(run.status)) { source.close(); complete.current(); }
+      if (terminal(run.status)) { source.close(); notifyTerminal([run]); }
     };
     source.addEventListener('run.snapshot', snapshot);
     source.addEventListener('message.delta', (event) => {
@@ -53,10 +60,14 @@ export function useRuns(session: string, onComplete: () => void) {
         [item.call_id]: { ...r.tool_activity[item.call_id], ...item, status: item.status || 'running' } } } : r));
     });
     source.addEventListener('run.started', () => update({ status: 'running' }));
-    for (const status of ['completed', 'failed', 'cancelled', 'budget_exceeded', 'interrupted']) source.addEventListener(`run.${status}`, async () => {
+    for (const status of ['completed', 'failed', 'cancelled', 'budget_exceeded', 'interrupted']) source.addEventListener(`run.${status}`, async event => {
       source.close();
-      try { update(await api<Run>(`/runs/${activeId}`)); complete.current(); }
-      catch (e) { setError(String(e)); }
+      // Terminal SSE already carries saved public text/output/usage. A failed GET
+      // must not leave the browser locked in running or omit artifact refresh.
+      const payload = JSON.parse((event as MessageEvent).data).payload as Partial<Run>;
+      update({ ...payload, status }); notifyTerminal([{ run_id: activeId, status }]);
+      try { update(await api<Run>(`/runs/${activeId}`)); }
+      catch (e) { setError(`终态已收到，详细结果暂未读取：${String(e)}。可查询运行状态。`); }
     });
     source.onerror = () => { setError('连接暂时中断，正在重连；可查询运行状态。'); };
     return () => source.close();
@@ -74,7 +85,7 @@ export function useRuns(session: string, onComplete: () => void) {
       localStorage.setItem(`${key}:${run.run_id}`, JSON.stringify(command));
       localStorage.removeItem(`${key}:pending`); pendingRef.current = undefined; setPending(undefined); setPendingChecked(false);
       setRuns(list => list.some(r => r.run_id === run.run_id) ? list.map(r => r.run_id === run.run_id ? run : r) : [...list, run]);
-      if (terminal(run.status)) complete.current();
+      if (terminal(run.status)) notifyTerminal([run]);
       return true;
     } catch (e) {
       if (e instanceof HttpError && e.status >= 400 && e.status < 500) {

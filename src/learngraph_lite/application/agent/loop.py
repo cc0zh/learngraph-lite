@@ -43,6 +43,7 @@ class RunRequest:
     source_event_id: str | None = None
     explanation_slot: str | None = None
     stream: bool = False
+    proposal_purpose: str = "改进学习路线"
 
 
 @dataclass(frozen=True)
@@ -155,7 +156,7 @@ class AgentLoop:
     def _admit(self, request: RunRequest, budget: Budget) -> tuple[RunRecord, bool]:
         if self._closed:
             raise RunAdmissionError("shutting_down", "application is shutting down")
-        planning_task = request.mode in {"clarify", "graph"}
+        planning_task = request.mode in {"clarify", "graph", "proposal"}
         if planning_task:
             if request.goal_id is None or request.node_id is not None or request.task_ref != f"goal:{request.goal_id}":
                 raise RunAdmissionError("invalid_scope", "planning tasks require a goal task_ref and no node")

@@ -84,6 +84,10 @@ class LearningService:
         except KeyError:
             self.start_goal(graph)
 
+    def migrate_graph(self, graph: GraphSnapshot) -> bool:
+        """Preserve historical artifacts; only current-version evidence is counted."""
+        return self._repository.mutate(graph.goal_id, lambda state: migrate_learning_graph(state, graph))
+
     def validate_lesson_exercises(self, package: LessonPackage) -> None:
         state = self._repository.get(package.goal_id)
         _require_node(state.graph, package.node_id)
@@ -212,7 +216,8 @@ class LearningService:
         state = self._repository.get(goal_id)
         _check_graph(state, expected_graph)
         mastery = {node.id: _mastery(state, node.id)[0] for node in state.graph.nodes}
-        recent_wrong = tuple(attempt.node_id for attempt in state.attempts if attempt.counted and not attempt.is_correct)[-5:]
+        recent_wrong = tuple(attempt.node_id for attempt in state.attempts
+                             if _current_attempt(state, attempt) and not attempt.is_correct)[-5:]
         return recommend_next_action(
             graph=state.graph,
             mastery_by_node=mastery,
@@ -235,6 +240,20 @@ def _mastery(state: LearningState, node_id: str) -> tuple[MasteryState, int, flo
     counted = tuple(
         AttemptResult(attempt.exercise_id, attempt.is_correct)
         for attempt in state.attempts
-        if attempt.node_id == node_id and attempt.counted
+        if attempt.node_id == node_id and _current_attempt(state, attempt)
     )
     return score_mastery(counted)
+
+
+def _current_attempt(state: LearningState, attempt: Attempt) -> bool:
+    exercise = state.exercises.get(attempt.exercise_id)
+    return (attempt.counted and exercise is not None
+            and exercise.graph_content_revision == state.graph.content_revision)
+
+
+def migrate_learning_graph(state: LearningState, graph: GraphSnapshot) -> bool:
+    if state.graph.goal_id != graph.goal_id:
+        raise StaleLearningGraphError("learning goal scope does not match graph")
+    reset = state.graph.content_revision != graph.content_revision
+    state.graph = graph
+    return reset

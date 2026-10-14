@@ -1,5 +1,37 @@
 # LearnGraph Lite 从零实现计划
 
+## 真实浏览器 P0 与 P1 产品体验（已完成，2026-10-14）
+
+- 用户授权：补齐真实浏览器 P0 验收与 P1 产品体验；沿用本地单用户、现有 React/SQLite/AgentLoop，不增加 P2、登录、云部署或外部写入。真实调用限于现有模型配置、独立测试数据库及非敏感样例，不读取/上传日常资料，不推送或部署。
+- 起点：`c0ba6c4`，119 Python/19 Node/11 fixture/mock 浏览器用例与一次真实 P0 HTTP 通过。已有资料/学习包 HTTP，提案只有离线规则；不能把后端用例当作产品体验完成。
+- UI 决定：复用现有 indigo/green、系统字体与工作台布局。已查 ui-ux-pro-max 设计系统和 React async/forms 建议，采纳对比度、明确 loading/empty/error、键盘焦点、窄屏标签及 reduced-motion，不引入外部字体请求或无关重设计。
+- [x] 资料闭环：列表/上传/解析状态/reparse，目标和节点显式绑定，分页分块原文；回答、图谱、练习、学习包各自产物引用定位。未知来源不可点击，失效显示409降级，删除和目标解绑需明确确认。
+- [x] 学习包闭环：固定四类组件、版本/历史只读、正式题卡作答、ACK与解释分离；持久event_id/slot/request_id，响应丢失不自动增费、事件不计成绩。新题/工具产物完成后只读刷新；未知组件安全占位，历史反馈按题目ID读取，未答不泄露答案。
+- [x] 提案闭环：pending/accepted/rejected/conflicted持久化、严格四操作、稳定root operation key；按钮/教学工具共用用例。接受/拒绝显式HTTP，scope/base revision校验，规划/学习/提案同SQLite短事务，模型在事务外；保留历史、明示内容失效，不破坏性删除已学习节点。
+- [x] 浏览器验收：fixture P1全旅程、错误/重复/刷新/版本冲突及四屏宽；opt-in真实Chromium从首页实际输入点击开始，不预置接口结果、不mock模型。独立数据库、有界付费、脱敏证据；一次通过不代表20例质量评估。
+- [x] 回归与审查：139 Python、19 Node、web build、34 fixture/mock E2E、20/20离线评估及import边界通过；安全/一致性/恢复审查实际缺陷已修并补回归。相关demo/文档/diff收口见本节末尾。
+- 并行分工：资料前端、学习包前端、提案后端各自独立文件；主负责共享契约、只读补口、fixture、提案UI、真实入口、集成与记录。子任务不各自提交、不读`.env`/日常数据库、不发真实请求，不并发占用同一E2E端口。
+
+### 验收与审查修复
+
+- `npm.cmd run ci`：139 Python、19 Node通过，import/文档骨架/仓库/Action检查通过；`npm.cmd run check:web`：TypeScript/Vite通过；`npm.cmd run test:e2e`：34 passed；`npm.cmd run eval:offline`：20/20。34条离线浏览器证据为13 P0、3资料、13学习包、5提案，与下述1条真实证据分开。
+- 初轮两处P0旧测试把所有session当教学session，导致mock查询/计数误伤独立学习包模式；收窄作用域后仍验证聊天和练习同bounded session。首轮P1提案旅程暴露新题后学习包列表未刷新，修复只读结果信号；不是改成功预期掩盖业务失败。
+- 审查修复：新增节点citation tuple导致strict HTTP响应500；教学生成在检查与初始化之间可切换图谱；click event误作retry ID；接受响应丢失未同步父图谱；终态GET失败遗留running/人工查询不刷新产物；旧包列表覆盖新版本。对应HTTP/竞态和浏览器回归均通过。
+- 节点ID拒绝URL分隔/转义及`./..`，防路由重解释，128字符/中文仍可用。安全子审查首次未返回结论，补审当前源/tests后明确未发现可复现新问题（静态结论，不代替动态测试或全量diff证明）。
+- 既有TestClient弃用提示和Uvicorn shutdown graceful timeout/CancelledError仍出现；CI退出码0，保留技术债，不隐藏成已解决。
+
+### 真实 Chromium 浏览器 P0
+
+- `npm.cmd run smoke:p0:browser:real`（2026-10-14 03:21–03:22 UTC）一次通过：首页创建 → 真实澄清 → UI保存/明确确认 → 三节点生成 → 人工标题修改/发布 → 真实`create_exercise` → 选择公开第一选项并提交 → 反馈/1样本/规则推荐 → 按钮第二题 → 刷新保留对话/两题/反馈且0 POST。375/768/1024/1440无溢出、无外站浏览器请求。核心写操作全部来自UI，仅最后GET脱敏计数和完成run证据。
+- 模型`deepseek-flash`，provider host `api.deepseek.com`，6次模型调用（全旅程计数上限14），usage input 8926 / output 4391 / total 13317；4个run均completed。教学本次直接调用出题工具，不强求冗余上下文工具调用，服务器已装配上下文。
+- 本地证据：`.local/p0-browser-real-2026-10-14T03-21-51-970Z.json`、同名`.sqlite3`与`-completed.png`；原始报告/截图/库/Key不提交。目标`78cd2b34-3f71-47ae-aaeb-96cad2fac1d7`，仅非敏感Python列表/元组样例。浏览器/API由Playwright启停，retries=0，fixture8000/5173与real8010/5183隔离。
+- 截图抽查：可变性、原地修改/重绑定示例、两道题和已提交反馈可读；首选项本次答对，但仍仅1样本/学习中，不能称掌握。本次没有真实生成P1资料型内容/学习包/提案，P1证据来自真实业务HTTP+fixture模型及明确标注的异常mock。
+- 剩余：P1真实引用语义、解释/题目/组件/提案质量、20例真实评估、M5最终交接；真实取消/失败/重试、多供应商未验收。全局content_revision的语义/依赖变更保守使所有旧内容只读，不做节点级最小迁移；priority/minutes只改计划修订。初次publish/ensure_goal仍两次写入，提案接受才保证跨聚合原子性；图谱/资料完整版本仓库、生成提交跨资料窄窗口仍见技术债。
+
+### 收口记录
+
+- 已同步README、架构、质量评分、测试指南、history和学习笔记；`demo:fixture`、`demo:learning-agent`、`check:docs`、`check:repo`、`git diff --check`均通过，8000/8010/5173/5183无遗留监听。不重复收费旅程，最终本地提交与工作区状态由交付消息给出；原始真实证据/Key不入Git，不推送或部署。
+
 ## P0 基线固化与真实模型验证（已完成，2026-10-14）
 
 - 用户授权：修复测试配置隔离、固化当前 React P0 本地 Git 基线，并使用已有配置验证真实模型 P0；允许有界真实 API 调用，不推送、部署或公开本地配置/资料。

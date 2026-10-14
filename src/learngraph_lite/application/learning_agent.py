@@ -18,6 +18,8 @@ from learngraph_lite.application.lesson_generation import GenerateLesson, Lesson
 from learngraph_lite.application.lessons import LessonError, LessonRepository
 from learngraph_lite.application.learning import LearningRepository, LearningService, StaleLearningGraphError
 from learngraph_lite.application.planning import PlanningRepository, PlanningState
+from learngraph_lite.application.proposals import GraphProposalService, ProposalError, ProposalInput
+from learngraph_lite.application.proposal_generation import proposal_operation_key
 from learngraph_lite.domain.learning import GraphStatus
 
 
@@ -45,13 +47,15 @@ class NextActionInput(ContextInput):
 
 class LearningContext:
     def __init__(self, planning: PlanningRepository, learning: LearningRepository,
-                 documents: DocumentRepository | None = None, lessons: LessonRepository | None = None):
+                 documents: DocumentRepository | None = None, lessons: LessonRepository | None = None,
+                 proposals: GraphProposalService | None = None):
         self._planning = planning
         self._learning_repository = learning
         self._learning = LearningService(learning)
         self._document_repository = documents
         self._documents = DocumentService(documents) if documents is not None else None
         self._lessons = lessons
+        self._proposals = proposals
 
     def locate_run_source(self, goal_id: str, node_id: str | None, source: dict) -> dict:
         if self._documents is None:
@@ -84,6 +88,23 @@ class LearningContext:
         except StaleLearningGraphError as exc:
             raise LearningContextError("stale_learning_graph", str(exc)) from exc
         return {"goal": asdict(state.goal), **data}
+
+    def exercise_feedback(self, goal_id: str, exercise_id: str) -> dict:
+        """Historical review discloses feedback only after a saved user attempt."""
+        try:
+            self._planning.get(goal_id)
+            state = self._learning_repository.get(goal_id)
+            exercise = state.exercises[exercise_id]
+        except KeyError as exc:
+            raise LearningContextError("exercise_not_found", "Exercise does not exist in this goal.") from exc
+        if exercise.goal_id != goal_id:
+            raise LearningContextError("exercise_not_found", "Exercise does not exist in this goal.")
+        attempt = next((item for item in reversed(state.attempts)
+                        if item.exercise_id == exercise_id and item.goal_id == goal_id), None)
+        if attempt is None:
+            return {"feedback": None}
+        return {"feedback": {"attempt": asdict(attempt), "correct_option_id": exercise.correct_option_id,
+                             "explanation": exercise.explanation}}
 
     def next_action(self, goal_id: str, node_id: str, available_minutes: int | None = None) -> dict:
         if available_minutes is not None and (type(available_minutes) is not int or available_minutes <= 0):
@@ -134,7 +155,10 @@ class LearningContext:
         if request.mode == "teaching":
             if not isinstance(model, BudgetedModelGateway) or root_task_id is None:
                 raise LearningContextError("generation_not_configured", "Teaching requires a shared execution gateway.")
-            generator = GenerateExercise(self._learning_repository, self.context, self._document_repository)
+            # Every generator context check stays bound to this turn's snapshot,
+            # including the gap after read() and before generation starts.
+            bound_context = lambda _goal, _node: read({})
+            generator = GenerateExercise(self._learning_repository, bound_context, self._document_repository)
 
             def create_exercise(args: dict):
                 read({})
@@ -149,8 +173,27 @@ class LearningContext:
                 ExerciseInput, create_exercise,
             ))
             generation_instructions = "create_exercise 可创建每任务一批单选题；题量1至3，使用相同参数重试。仅保存成功才算出题。来源模式以工具返回为准；题目 citation_map 属于该题，不能用作回答的引用表。正式答案和解析由作答接口返回，不猜测或披露正确选项。"
+            if self._proposals is not None:
+                def propose_graph_change(args: dict):
+                    read({})
+                    # Tool validation expands optional defaults; remove only those
+                    # defaults before the shared strict use case validates again.
+                    args = {**args, "operations": [{key: value for key, value in item.items() if value is not None}
+                                                   for item in args["operations"]]}
+                    try:
+                        proposal = self._proposals.create(goal_id, proposal_operation_key(root_task_id), args,
+                            before_save=lambda: model.budget.check_step(0))
+                    except ProposalError as exc:
+                        raise ToolError(f"{exc.code}: {exc}") from exc
+                    generated["proposal"] = proposal
+                    return {"proposal": proposal}
+                tools.register(Tool.from_model(
+                    "propose_graph_change", "Save one pending graph proposal for this bound goal; never applies a decision.",
+                    ProposalInput, propose_graph_change,
+                ))
+                generation_instructions += "propose_graph_change 仅创建本任务一个待审核提案，base_revision使用当前graph_revision；相同参数重试。用户接受/拒绝只能通过普通API，不能替用户决定或修改成绩。"
             if self._lessons is not None:
-                lesson_generator = GenerateLesson(self._lessons, self._learning_repository, self.context, self._document_repository)
+                lesson_generator = GenerateLesson(self._lessons, self._learning_repository, bound_context, self._document_repository)
 
                 def create_lesson(args: dict):
                     read({})

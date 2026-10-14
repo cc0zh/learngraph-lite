@@ -24,6 +24,8 @@ from learngraph_lite.application.lessons import LessonError, LessonService
 from learngraph_lite.application.learning_agent import LearningContext, LearningContextError
 from learngraph_lite.application.planning import PlanningError, PlanningService
 from learngraph_lite.application.planning_generation import CandidateGraph
+from learngraph_lite.application.proposals import GraphProposalService, OperationInput, ProposalError, ProposalInput
+from learngraph_lite.application.proposal_generation import ProposalGenerationInput
 from learngraph_lite.domain.learning import GoalDraft, GraphSnapshot, GraphValidationError, RevisionConflict
 from learngraph_lite.domain.lessons import LessonComponent, LessonEvent
 from learngraph_lite.presentation.sse import encode_snapshot, encode_sse, public_run
@@ -94,6 +96,27 @@ class PublicExercise(BaseModel):
     citation_ids: list[str] = Field(default_factory=list)
     citation_map: dict[str, AnswerSource] = Field(default_factory=dict)
     unverified_citation_ids: list[str] = Field(default_factory=list)
+
+
+class PublicAttempt(BaseModel):
+    id: str
+    exercise_id: str
+    goal_id: str
+    node_id: str
+    selected_option_id: str
+    is_correct: bool
+    counted: bool
+    created_at: datetime
+
+
+class PublicFeedback(BaseModel):
+    attempt: PublicAttempt
+    correct_option_id: str
+    explanation: str
+
+
+class ExerciseFeedback(BaseModel):
+    feedback: PublicFeedback | None
 
 
 class PublicLesson(BaseModel):
@@ -174,6 +197,41 @@ class PublishGraph(PlanningVersion):
     expected_revision: int = Field(ge=0)
 
 
+class PublicProposal(BaseModel):
+    id: str
+    goal_id: str
+    base_revision: int
+    operations: list[OperationInput]
+    rationale: str
+    status: Literal["pending", "accepted", "rejected", "conflicted"]
+
+
+class ProposalList(BaseModel):
+    proposals: list[PublicProposal]
+
+
+class CreateProposal(ProposalInput):
+    request_id: Identifier
+
+
+class SubmitProposal(ProposalGenerationInput):
+    session_id: Identifier
+    request_id: Identifier
+    retry_of_run_id: Identifier | None = None
+
+
+class ProposalDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    decision: Literal["accept", "reject"]
+    expected_revision: int = Field(ge=0)
+
+
+class ProposalDecisionView(BaseModel):
+    proposal: PublicProposal
+    planning: PlanningView
+    learning_reset: bool
+
+
 class AnswerSources(BaseModel):
     citation_map: dict[str, AnswerSource] = Field(default_factory=dict)
     unverified_citation_ids: list[str] = Field(default_factory=list)
@@ -181,6 +239,7 @@ class AnswerSources(BaseModel):
     source_mode: Literal["general", "documents"] | None = None
     planning: PlanningView | None = None
     lesson: PublicLesson | None = None
+    proposal: PublicProposal | None = None
 
 
 class SubmitExercises(BaseModel):
@@ -299,6 +358,7 @@ def create_app(
     document_imports: DocumentImports | None = None,
     lessons: GenerateLesson | None = None,
     lesson_events: LessonService | None = None,
+    proposals: GraphProposalService | None = None,
 ) -> FastAPI:
     """Create a process-local API, with cooperative shutdown and snapshot-first SSE."""
     if not math.isfinite(heartbeat_seconds) or heartbeat_seconds <= 0:
@@ -356,7 +416,7 @@ def create_app(
 
     @app.exception_handler(LearningContextError)
     async def learning_error(request: Request, exc: LearningContextError):
-        status = 404 if exc.code in {"goal_not_found", "node_not_found"} else 409
+        status = 404 if exc.code in {"goal_not_found", "node_not_found", "exercise_not_found"} else 409
         return _error(status, exc.code, str(exc))
 
     @app.exception_handler(DocumentAccessError)
@@ -380,6 +440,12 @@ def create_app(
     async def planning_error(request: Request, exc: PlanningError):
         return _error(404 if exc.code == "goal_not_found" else 409, exc.code, str(exc))
 
+    @app.exception_handler(ProposalError)
+    async def proposal_error(request: Request, exc: ProposalError):
+        status = (404 if exc.code in {"goal_not_found", "proposal_not_found"} else
+                  422 if exc.code in {"invalid_proposal", "invalid_decision", "invalid_proposal_candidate"} else 409)
+        return _error(status, exc.code, str(exc))
+
     @app.exception_handler(RevisionConflict)
     async def revision_error(request: Request, exc: RevisionConflict):
         return _error(409, "revision_conflict", str(exc))
@@ -389,6 +455,19 @@ def create_app(
         return _error(422, "invalid_graph", str(exc))
 
     if document_imports is not None:
+        @app.get("/api/documents")
+        def list_documents(offset: Annotated[int, Query(ge=0)] = 0,
+                           limit: Annotated[int, Query(ge=1, le=50)] = 50):
+            return document_imports.list(offset=offset, limit=limit)
+
+        @app.get("/api/documents/{document_id}/bindings")
+        def list_document_bindings(document_id: Identifier):
+            return document_imports.bindings(document_id)
+
+        @app.get("/api/goals/{goal_id}/document-bindings")
+        def get_bound_documents(goal_id: Identifier, node_id: Identifier | None = None):
+            return document_imports.bound(goal_id, node_id)
+
         @app.post("/api/documents", status_code=202, response_model=PublicDocument)
         async def upload_document(file: Annotated[UploadFile, File()]):
             try:
@@ -494,6 +573,43 @@ def create_app(
             if on_publish is not None:
                 on_publish(graph)
             return planning.describe(goal_id)
+
+    if proposals is not None:
+        @app.get("/api/goals/{goal_id}/graph-proposals", response_model=ProposalList,
+                 response_model_exclude_unset=True)
+        def list_proposals(goal_id: Identifier):
+            return proposals.list_proposals(goal_id)
+
+        @app.get("/api/goals/{goal_id}/graph-proposals/{proposal_id}", response_model=PublicProposal,
+                 response_model_exclude_unset=True)
+        def get_proposal(goal_id: Identifier, proposal_id: Identifier):
+            return proposals.get_proposal(goal_id, proposal_id)
+
+        @app.post("/api/goals/{goal_id}/graph-proposals", status_code=201, response_model=PublicProposal,
+                  response_model_exclude_unset=True)
+        def create_proposal(goal_id: Identifier, body: CreateProposal):
+            args = body.model_dump(exclude_unset=True)
+            request_id = args.pop("request_id")
+            return proposals.create(goal_id, f"request:{request_id}", args)
+
+        @app.post("/api/goals/{goal_id}/graph-proposals/generate", status_code=202,
+                  response_model=PublicRun, response_model_exclude_unset=True)
+        def generate_proposal(goal_id: Identifier, body: SubmitProposal):
+            return public_run(loop.submit(RunRequest(
+                session_id=body.session_id, task_ref=f"goal:{goal_id}", goal_id=goal_id,
+                user_text="生成图谱提案", mode="proposal", idempotency_key=body.request_id,
+                retry_of_run_id=body.retry_of_run_id, proposal_purpose=body.purpose,
+            )))
+
+        @app.post("/api/goals/{goal_id}/graph-proposals/{proposal_id}/decision",
+                  response_model=ProposalDecisionView, response_model_exclude_unset=True)
+        def decide_proposal(goal_id: Identifier, proposal_id: Identifier, body: ProposalDecision):
+            return proposals.decide(goal_id, proposal_id, body.decision, body.expected_revision)
+
+    if learning_context is not None:
+        @app.get("/api/goals/{goal_id}/exercises/{exercise_id}/feedback", response_model=ExerciseFeedback)
+        def exercise_feedback(goal_id: Identifier, exercise_id: Identifier):
+            return learning_context.exercise_feedback(goal_id, exercise_id)
 
     if exercises is not None:
         @app.post("/api/goals/{goal_id}/nodes/{node_id}/exercises", status_code=202,

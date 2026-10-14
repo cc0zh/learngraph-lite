@@ -75,6 +75,8 @@ def validate_graph(graph: GraphDraft) -> tuple[str, ...]:
     for node in graph.nodes:
         if not node.id.strip():
             errors.append("node id is required")
+        if node.id in {".", ".."} or any(character in node.id for character in "/\\?#%"):
+            errors.append("node id cannot contain URL path, query, fragment or escape delimiters")
         if not node.title.strip():
             errors.append(f"node {node.id} title is required")
         if node.estimated_minutes <= 0:
