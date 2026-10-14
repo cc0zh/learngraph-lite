@@ -6,7 +6,7 @@ from contextlib import closing
 import json
 import hashlib
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from learngraph_lite.application.planning import PlanningError, PlanningState
 from learngraph_lite.domain.documents import Citation, Document, DocumentChunk, DocumentKind, tokenize
 from learngraph_lite.domain.lessons import ComponentKind, LessonComponent, LessonEvent, LessonPackage
 from learngraph_lite.domain.learning import Attempt, ExerciseOption, ExercisePrivate, GoalDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus
+from learngraph_lite.domain.learning.goals import build_goal_draft
 
 
 class SQLitePlanningRepository:
@@ -957,20 +958,17 @@ def _goal_to_json(goal: GoalDraft) -> dict:
     data = asdict(goal)
     data["document_ids"] = list(goal.document_ids)
     data["assumptions"] = list(goal.assumptions)
+    data["skipped_fields"] = list(goal.skipped_fields)
     return data
 
 
 def _goal_from_json(data: dict) -> GoalDraft:
-    return GoalDraft(
-        title=data["title"],
-        desired_outcome=data.get("desired_outcome", ""),
-        current_level=data.get("current_level", ""),
-        time_budget_minutes=data.get("time_budget_minutes"),
-        constraints=data.get("constraints", ""),
-        document_ids=tuple(data.get("document_ids", ())),
-        assumptions=tuple(data.get("assumptions", ())),
-        confirmed=bool(data.get("confirmed", False)),
-    )
+    # Assumptions are derived, not user inputs. Rebuild them so legacy defaults
+    # cannot reintroduce unsupported ability or calendar claims into prompts.
+    draft = build_goal_draft(data["title"], **{name: data[name] for name in
+        ("desired_outcome", "current_level", "time_budget_minutes", "constraints", "document_ids", "skipped_fields")
+        if name in data})
+    return replace(draft, confirmed=bool(data.get("confirmed", False)))
 
 
 def _graph_to_json(graph: GraphSnapshot | None) -> dict | None:

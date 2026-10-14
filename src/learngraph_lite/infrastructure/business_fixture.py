@@ -52,6 +52,17 @@ class BusinessFixtureModel:
                 "explanation": "通过一个具体例子理解概念、适用条件与限制。", "learning_outcome": "能够解释原理并完成一个最小例子。",
                 "estimated_minutes": 20, "priority": 3} for i in range(count)],
                 "edges": [{"source": f"node-{i}", "target": f"node-{i+1}"} for i in range(1, count)]}
+            if data.get("feedback", "").strip():
+                feedback = data["feedback"]
+                easier = any(word in feedback for word in ("太难", "简单", "入门", "基础"))
+                for index, node in enumerate(value["nodes"]):
+                    previous = data["current_graph"]["nodes"]
+                    title = previous[index % len(previous)]["title"]
+                    node["title"] = ("基础练习：" if easier else "重点验证：") + title[:100]
+                    node["estimated_minutes"] = 10 if easier else 25
+                    node["priority"] = 5 if index == 0 else 3
+                    node["explanation"] = "fixture 根据反馈调整：先用基础例子验证理解，再依次学习；这是后续实践的必要铺垫。"
+                    node["learning_outcome"] = "用自己的话解释一个基础概念，完成对应练习并对照结果纠正错误。"
         elif "CandidateProposal" in instruction:
             graph = data["context"]["graph"]
             value = {"rationale": "fixture 建议补充当前节点的验证步骤，请人工审核。",

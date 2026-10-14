@@ -21,6 +21,8 @@ from learngraph_lite.bootstrap import build_learning_loop, create_real_app
 from learngraph_lite.domain.learning import GraphNode, GraphStatus, MasteryState
 from learngraph_lite.domain.learning.recommendations import recommend_next_action
 from learngraph_lite.infrastructure import SQLitePlanningRepository
+from learngraph_lite.infrastructure.business_fixture import BusinessFixtureModel
+from learngraph_lite.infrastructure.run_persistence import SQLiteRunRepository
 
 
 class Model:
@@ -362,3 +364,252 @@ def test_legacy_planning_migration_and_priority_keep_existing_semantics():
         assert recommend_next_action(graph=graph, mastery_by_node={}, recent_wrong_node_ids=("a",)).node_id == "a"
         assert recommend_next_action(graph=graph, mastery_by_node={"b": MasteryState.PROFICIENT}).node_id == "a"
         assert asdict(graph.nodes[1])["priority"] == 5
+
+
+def test_confirm_merges_once_preserves_unchanged_draft_and_rolls_back_conflicts():
+    with tempfile.TemporaryDirectory() as directory:
+        for repository in (InMemoryPlanningRepository(), SQLitePlanningRepository(Path(directory) / "planning.db")):
+            service = PlanningService(repository)
+            service.create_goal("g", "学习音乐", document_ids=("d1",))
+            with patch.object(repository, "mutate", wraps=repository.mutate) as mutate:
+                goal = service.confirm_goal("g", 0, title="节奏入门", desired_outcome="解释节拍",
+                    current_level="没有学过", time_budget_minutes=60, constraints="无需乐器",
+                    skipped_fields=["time_budget_minutes"])
+                assert mutate.call_count == 1
+            assert goal.confirmed and goal.document_ids == ("d1",)
+            assert goal.skipped_fields == () and service.get_state("g").version == 1
+            graph = CandidateGraph.model_validate_json(graph_json()).graph()
+            service.save_graph_draft("g", graph.nodes, graph.edges)
+            previous = service.get_state("g")
+            service.confirm_goal("g", previous.version)
+            assert service.current_graph("g") == previous.graph
+            service.confirm_goal("g", previous.version + 1, title="  节奏入门  ", desired_outcome="解释节拍")
+            assert service.current_graph("g") == previous.graph
+            before = service.get_state("g")
+            for version, fields, code in ((before.version - 1, {"title": "过期编辑"}, "planning_conflict"),
+                                          (before.version, {"title": ""}, None)):
+                try:
+                    service.confirm_goal("g", version, **fields)
+                except ValueError as exc:
+                    assert code is None or exc.code == code
+                else:
+                    raise AssertionError("invalid confirmation accepted")
+                assert service.get_state("g") == before
+            service.confirm_goal("g", before.version, constraints="每天练习", time_budget_minutes=None)
+            edited = service.get_state("g")
+            assert edited.version == before.version + 1 and edited.graph is None
+            assert edited.goal.confirmed and edited.goal.time_budget_minutes is None
+            service.save_graph_draft("g", graph.nodes, graph.edges)
+            service.publish_graph("g", 0)
+            published = service.get_state("g")
+            try:
+                service.confirm_goal("g", published.version, current_level="绕过发布限制")
+            except PlanningError as exc:
+                assert exc.code == "graph_published"
+            else:
+                raise AssertionError("published goal edit accepted")
+            assert service.get_state("g") == published
+            service.confirm_goal("g", published.version)  # Legacy reconfirmation never replaces the published graph.
+            assert service.current_graph("g") == published.graph
+
+
+def test_sqlite_concurrent_confirm_edits_have_one_atomic_winner():
+    with tempfile.TemporaryDirectory() as directory:
+        database = Path(directory) / "planning.db"
+        service = PlanningService(SQLitePlanningRepository(database))
+        service.create_goal("g", "学习")
+        barrier = threading.Barrier(2)
+        def confirm(title):
+            barrier.wait(5)
+            try:
+                PlanningService(SQLitePlanningRepository(database)).confirm_goal("g", 0, title=title)
+                return "confirmed"
+            except PlanningError as exc:
+                return exc.code
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert sorted(pool.map(confirm, ("音乐", "绘画"))) == ["confirmed", "planning_conflict"]
+        saved = service.get_state("g")
+        assert saved.version == 1 and saved.goal.confirmed and saved.goal.title in {"音乐", "绘画"}
+
+
+def test_confirm_http_optional_edits_skips_and_strict_validation():
+    with tempfile.TemporaryDirectory() as directory:
+        database = Path(directory) / "app.db"
+        model = Model([])
+        with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=model):
+            app = create_real_app(database=database)
+        with TestClient(app, base_url="http://localhost") as api:
+            created = api.post("/api/goals", json={"title": "音乐", "skipped_fields": ["current_level"]}).json()
+            base = f"/api/goals/{created['goal_id']}"
+            assert created["goal"]["skipped_fields"] == ["current_level"]
+            invalid_skips = [None, "current_level", ["title"], [True], [1], ["current_level", "current_level"],
+                             [" current_level"], ["desired_outcome", "current_level", "time_budget_minutes", "title"]]
+            for skipped in invalid_skips:
+                payload = {"skipped_fields": skipped}
+                assert api.post("/api/goals", json={"title": "无效", **payload}).status_code == 422
+                assert api.patch(base, json={"expected_version": 0, **payload}).status_code == 422
+                assert api.post(base + "/confirm", json={"expected_version": 0, **payload}).status_code == 422
+            for payload in ({}, {"expected_version": "0"}, {"expected_version": True}, {"expected_version": -1},
+                            {"expected_version": 0, "title": " "}, {"expected_version": 0, "current_level": 123},
+                            {"expected_version": 0, "time_budget_minutes": "60"},
+                            {"expected_version": 0, "time_budget_minutes": True},
+                            {"expected_version": 0, "time_budget_minutes": 0},
+                            {"expected_version": 0, "document_ids": []}, {"expected_version": 0, "confirmed": True},
+                            {"expected_version": 0, "constraints": "x" * 2001}):
+                assert api.post(base + "/confirm", json=payload).status_code == 422
+            for name in ("title", "desired_outcome", "current_level", "constraints", "skipped_fields"):
+                assert api.post(base + "/confirm", json={"expected_version": 0, name: None}).status_code == 422
+            assert api.get(base).json() == created and not model.calls
+            response = api.post(base + "/confirm", json={"expected_version": 0, "title": "节奏",
+                "desired_outcome": "解释节拍", "current_level": "新手", "time_budget_minutes": 60,
+                "constraints": "无需乐器", "skipped_fields": ["time_budget_minutes"]})
+            assert response.status_code == 200, response.text
+            confirmed = response.json()
+            assert confirmed["version"] == 1 and confirmed["goal"]["confirmed"]
+            assert confirmed["goal"]["skipped_fields"] == []
+            assert confirmed["goal"]["current_level"] == "新手" and confirmed["questions"] == []
+            assert api.post(base + "/confirm", json={"expected_version": 0, "title": "过期"}).status_code == 409
+            assert api.get(base).json() == confirmed
+            legacy = api.post(base + "/confirm", json={"expected_version": 1})
+            assert legacy.status_code == 200 and legacy.json()["version"] == 2
+            cleared = api.patch(base, json={"expected_version": 2, "skipped_fields": []}).json()
+            assert cleared["goal"]["skipped_fields"] == [] and not cleared["goal"]["confirmed"]
+            final = api.post(base + "/confirm", json={"expected_version": 3, "time_budget_minutes": None}).json()
+            assert final["version"] == 4 and final["goal"]["time_budget_minutes"] is None
+            # Filling an input clears its skip flag in create, PATCH and atomic confirm alike.
+            filled = api.post("/api/goals", json={"title": "绘画", "desired_outcome": "解释色彩",
+                "skipped_fields": ["desired_outcome", "current_level", "time_budget_minutes"]}).json()
+            filled_base = f"/api/goals/{filled['goal_id']}"
+            assert filled["goal"]["skipped_fields"] == ["current_level", "time_budget_minutes"]
+            patched = api.patch(filled_base, json={"expected_version": 0, "current_level": "新手"}).json()
+            assert patched["goal"]["skipped_fields"] == ["time_budget_minutes"]
+            supplied = api.post(filled_base + "/confirm", json={"expected_version": 1, "time_budget_minutes": 120}).json()
+            assert supplied["version"] == 2 and supplied["goal"]["skipped_fields"] == []
+        with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=Model([])):
+            restored = create_real_app(database=database)
+        with TestClient(restored, base_url="http://localhost") as api:
+            assert api.get(base).json() == final
+
+
+def test_skips_avoid_clarification_and_prompt_marks_self_report_unverified():
+    repository, service = setup()
+    service.edit_goal("g1", 0, skipped_fields=["desired_outcome", "current_level", "time_budget_minutes"])
+    model = Model([graph_json(), graph_json()])
+    loop = build_learning_loop(model, repository, InMemoryLearningRepository())
+    try:
+        clarification = loop.run(request(service, "clarify"))
+        assert clarification.status == "completed" and model.calls == []
+        assert service.get_state("g1").clarification_round == 0
+        service.confirm_goal("g1", 1)
+        result = loop.run(request(service, key="missing"))
+        assert result.status == "completed", result.error
+        instruction, context = model.calls[0][0].content, json.loads(model.calls[0][1].content)
+        assert context["goal"]["time_budget_minutes"] is None and context["planning_reference_minutes"] == 240
+        assert context["goal"]["current_level"] == "" and len(context["goal"]["skipped_fields"]) == 3
+        assert "缺失基础不能假设" in instruction and "不得当作已验证能力" in instruction
+        assert "必要性" in instruction and "学习顺序" in instruction and "可观察" in instruction and "实践或验证" in instruction
+        service.confirm_goal("g1", service.get_state("g1").version, current_level="我已精通")
+        result = loop.run(request(service, key="reported"))
+        assert result.status == "completed", result.error
+        context = json.loads(model.calls[1][1].content)
+        assert context["goal"]["current_level"] == "我已精通"
+        assert any("用户自述" in item and "尚未验证" in item for item in context["goal"]["assumptions"])
+        assert "current_level 仅为用户自述，未经验证" in model.calls[1][0].content
+    finally:
+        loop.close()
+
+
+def test_feedback_requires_draft_and_fixture_changes_only_feedback_generation():
+    repository, service = setup(confirmed=True)
+    loop = build_learning_loop(BusinessFixtureModel(), repository, InMemoryLearningRepository())
+    try:
+        original = request(service)
+        try:
+            loop.run(replace(original, graph_feedback="太难，请增加基础"))
+        except PlanningError as exc:
+            assert exc.code == "graph_required"
+        else:
+            raise AssertionError("feedback accepted without graph")
+        generated = loop.run(original)
+        assert generated.status == "completed", generated.error
+        before = service.current_graph("g1")
+        assert before.nodes[0].title == "目标与边界" and before.nodes[0].estimated_minutes == 20
+        result = loop.run(replace(request(service, key="feedback"), graph_feedback="太难，请增加基础"))
+        assert result.status == "completed", result.error
+        after = service.current_graph("g1")
+        assert after.nodes[0].title == "基础练习：目标与边界" and after.nodes[0].estimated_minutes == 10
+        assert after.status == GraphStatus.DRAFT and after.revision == after.content_revision == 0
+        assert after.nodes[0].priority == 5 and after != before
+    finally:
+        loop.close()
+
+
+def test_graph_feedback_http_context_persistence_retry_fingerprint_and_publish_restriction():
+    with tempfile.TemporaryDirectory() as directory:
+        database = Path(directory) / "app.db"
+        model = Model([graph_json(), "{}", "{}"])
+        with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=model):
+            app = create_real_app(database=database)
+        with TestClient(app, base_url="http://localhost") as api:
+            created = api.post("/api/goals", json={"title": "音乐"}).json()
+            base = f"/api/goals/{created['goal_id']}"
+            api.post(base + "/confirm", json={"expected_version": 0})
+            initial = {"request_id": "initial", "expected_version": 1, "node_count": 2}
+            for invalid in (None, 123, True, "x" * 2001):
+                assert api.post(base + "/graph-drafts", json={**initial, "feedback": invalid}).status_code == 422
+            missing = api.post(base + "/graph-drafts", json={**initial, "feedback": "太难"})
+            assert missing.status_code == 409 and missing.json()["error"]["code"] == "graph_required"
+            assert model.calls == []
+            submitted = api.post(base + "/graph-drafts", json=initial)
+            assert submitted.status_code == 202
+            run_id = submitted.json()["run_id"]
+            api.get(f"/api/runs/{run_id}/events")
+            draft = api.get(base).json()
+            assert draft["version"] == 2 and draft["graph"]["status"] == "draft"
+            body = {"request_id": "feedback", "expected_version": 2, "node_count": 2,
+                    "feedback": "太难，请补基础并聚焦节奏练习"}
+            submitted = api.post(base + "/graph-drafts", json=body)
+            assert submitted.status_code == 202
+            failed_id = submitted.json()["run_id"]
+            api.get(f"/api/runs/{failed_id}/events")
+            assert api.get(f"/api/runs/{failed_id}").json()["status"] == "failed"
+            assert api.get(base).json() == draft
+            for messages in model.calls[1:]:  # Initial attempt and its single schema repair share the context.
+                context = json.loads(messages[1].content)
+                assert context["feedback"] == body["feedback"] and context["current_graph"] == draft["graph"]
+                assert "调整难度、范围、基础铺垫或重点" in messages[0].content
+            assert api.post(base + "/graph-drafts", json=body).json()["run_id"] == failed_id
+            conflict = api.post(base + "/graph-drafts", json={**body, "feedback": "另一条意见"})
+            assert conflict.status_code == 409 and conflict.json()["error"]["code"] == "idempotency_conflict"
+        stored = {record.run_id: request for request, record, _ in SQLiteRunRepository(database).load()}
+        assert stored[failed_id].graph_feedback == body["feedback"]
+        restored_model = Model([graph_json()])
+        with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=restored_model):
+            restored = create_real_app(database=database)
+        with TestClient(restored, base_url="http://localhost") as api:
+            assert api.get(base).json() == draft
+            retry = {**body, "request_id": "retry", "retry_of_run_id": failed_id}
+            rejected = api.post(base + "/graph-drafts", json={**retry, "feedback": "不同反馈"})
+            assert rejected.status_code == 409 and rejected.json()["error"]["code"] == "invalid_retry"
+            assert not restored_model.calls
+            submitted = api.post(base + "/graph-drafts", json=retry)
+            assert submitted.status_code == 202, submitted.text
+            retry_id = submitted.json()["run_id"]
+            api.get(f"/api/runs/{retry_id}/events")
+            result = api.get(f"/api/runs/{retry_id}").json()
+            assert result["status"] == "completed" and result["root_task_id"] == failed_id
+            saved = result["output"]["planning"]
+            assert saved["version"] == 3 and saved["graph"]["status"] == "draft"
+            assert saved["graph"]["revision"] == saved["graph"]["content_revision"] == 0
+            context = json.loads(restored_model.calls[0][1].content)
+            assert context["feedback"] == body["feedback"] and context["current_graph"] == draft["graph"]
+            stale = api.post(base + "/graph-drafts", json={**body, "request_id": "stale"})
+            assert stale.status_code == 409 and stale.json()["error"]["code"] == "planning_conflict"
+            published = api.post(base + "/graph/publish", json={"expected_version": 3, "expected_revision": 0}).json()
+            blocked = api.post(base + "/graph-drafts", json={**body, "request_id": "published", "expected_version": 4})
+            assert blocked.status_code == 409 and blocked.json()["error"]["code"] == "graph_published"
+            blocked = api.post(base + "/confirm", json={"expected_version": 4, "title": "绕过发布"})
+            assert blocked.status_code == 409 and blocked.json()["error"]["code"] == "graph_published"
+            assert api.get(base).json() == published and len(restored_model.calls) == 1
+        stored = {record.run_id: request for request, record, _ in SQLiteRunRepository(database).load()}
+        assert stored[retry_id].graph_feedback == body["feedback"]

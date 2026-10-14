@@ -54,6 +54,26 @@ small, .small { font-size: 12px; }
 .card-foot { display: flex; justify-content: space-between; padding-top: 16px; border-top: 1px solid #f1f5f9; font-size: 13px; }
 .card-foot strong { color: var(--primary); }
 .plan-grid { display: grid; grid-template-columns: minmax(260px, .75fr) minmax(450px, 1.4fr); gap: 24px; align-items: start; }
+.goal-guide h3:focus { outline: none; }
+.guide-options { display: grid; gap: 10px; }
+.guide-options button { text-align: left; font-weight: 500; }
+.text-button { background: transparent; color: var(--primary); padding: 12px 0; font-size: 13px; }
+.goal-summary { font-size: 14px; }
+.goal-summary dt { color: var(--muted); margin-top: 16px; font-size: 12px; }
+.goal-summary dd { margin: 5px 0 0; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.goal-summary small { display: block; color: #92400e; margin-top: 3px; }
+.route-estimate { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 14px; background: #f8fafc; border-radius: 8px; font-size: 14px; }
+.route-estimate span { color: var(--muted); }
+.stage-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.stage-card { border: 1px solid #e2e8f0; padding: 16px; border-radius: 10px; font-size: 14px; min-width: 0; }
+.stage-heading { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.stage-heading h3 { margin: 0; flex: 1; min-width: 100px; overflow-wrap: anywhere; }
+.stage-number { color: var(--primary); font-weight: 700; }
+.stage-card p { margin: 10px 0; }
+.stage-card details { padding: 0; }
+.route-feedback { margin: 24px 0; padding-top: 8px; border-top: 1px solid #e2e8f0; }
+.advanced-route { border-top: 1px solid #e2e8f0; }
+.advanced-route > summary { color: #475569; font-weight: 600; }
 .hint { border-left: 3px solid #818cf8; padding: 12px; background: #eef2ff; font-size: 14px; }
 .hint p { margin: 7px 0; }
 .empty { text-align: center; padding: 36px 20px; color: var(--muted); border: 1px dashed #cbd5e1; border-radius: 12px; margin: 20px 0; }

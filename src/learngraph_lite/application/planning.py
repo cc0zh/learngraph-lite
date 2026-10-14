@@ -109,9 +109,16 @@ class PlanningService:
             return state.goal, questions
         return self._mutate(goal_id, update)
 
-    def confirm_goal(self, goal_id: str, expected_version: int | None = None) -> GoalDraft:
+    def confirm_goal(self, goal_id: str, expected_version: int | None = None, **fields: object) -> GoalDraft:
         def update(state):
             self.check_version(state, expected_version)
+            if fields:
+                self._require_editable(state)
+                edited = self._merge_goal(state.goal, fields)
+                if any(getattr(edited, name) != getattr(state.goal, name) for name in fields):
+                    # Invalidate a candidate only when its actual goal inputs changed.
+                    state.graph = None
+                state.goal = edited
             state.goal = confirm_goal(state.goal)
             state.questions = ()
             return state.goal
@@ -154,7 +161,7 @@ class PlanningService:
     @staticmethod
     def _merge_goal(goal: GoalDraft, fields: dict) -> GoalDraft:
         values = {name: fields.get(name, getattr(goal, name)) for name in
-                  ("desired_outcome", "current_level", "time_budget_minutes", "constraints", "document_ids")}
+                  ("desired_outcome", "current_level", "time_budget_minutes", "constraints", "document_ids", "skipped_fields")}
         return build_goal_draft(fields.get("title", goal.title), **values)
 
     @staticmethod

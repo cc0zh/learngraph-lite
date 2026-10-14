@@ -13,7 +13,7 @@ from uuid import uuid4
 from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunRequest, TERMINAL_STATUSES
 from learngraph_lite.application.documents import DocumentAccessError
@@ -32,6 +32,16 @@ from learngraph_lite.presentation.sse import encode_snapshot, encode_sse, public
 
 
 Identifier = Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=128)]
+
+
+def _unique_skipped_fields(value: list[str]) -> list[str]:
+    if len(set(value)) != len(value):
+        raise ValueError("skipped_fields must not contain duplicates")
+    return value
+
+
+SkippedFields = Annotated[list[Literal["desired_outcome", "current_level", "time_budget_minutes"]],
+                          Field(max_length=3), AfterValidator(_unique_skipped_fields)]
 
 
 class SubmitRun(BaseModel):
@@ -153,9 +163,10 @@ class CreateGoal(BaseModel):
     time_budget_minutes: int | None = Field(default=None, ge=1)
     constraints: str = Field(default="", max_length=2000)
     document_ids: list[Identifier] = Field(default_factory=list, max_length=30)
+    skipped_fields: SkippedFields = Field(default_factory=list)
 
 
-class EditGoal(BaseModel):
+class ConfirmGoal(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     expected_version: int = Field(ge=0)
     title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)] | None = None
@@ -163,15 +174,24 @@ class EditGoal(BaseModel):
     current_level: str | None = Field(default=None, max_length=2000)
     time_budget_minutes: int | None = Field(default=None, ge=1)
     constraints: str | None = Field(default=None, max_length=2000)
-    document_ids: list[Identifier] | None = Field(default=None, max_length=30)
+    skipped_fields: SkippedFields | None = None
 
     @model_validator(mode="before")
     @classmethod
     def reject_null_fields(cls, value):
-        if isinstance(value, dict) and not (value.keys() - {"expected_version"}):
-            raise ValueError("At least one goal field is required")
         if isinstance(value, dict) and any(item is None for name, item in value.items() if name != "time_budget_minutes"):
             raise ValueError("Only time_budget_minutes may be cleared with null")
+        return value
+
+
+class EditGoal(ConfirmGoal):
+    document_ids: list[Identifier] | None = Field(default=None, max_length=30)
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_goal_field(cls, value):
+        if isinstance(value, dict) and not (value.keys() - {"expected_version"}):
+            raise ValueError("At least one goal field is required")
         return value
 
 
@@ -187,6 +207,7 @@ class PlanningTask(PlanningVersion):
 
 class GraphTask(PlanningTask):
     node_count: int = Field(default=10, ge=1, le=30)
+    feedback: str = Field(default="", max_length=2000)
 
 
 class EditGraph(CandidateGraph):
@@ -530,8 +551,10 @@ def create_app(
             return planning.describe(goal_id)
 
         @app.post("/api/goals/{goal_id}/confirm", response_model=PlanningView)
-        def confirm_goal(goal_id: Identifier, body: PlanningVersion):
-            planning.confirm_goal(goal_id, body.expected_version)
+        def confirm_goal(goal_id: Identifier, body: ConfirmGoal):
+            fields = body.model_dump(exclude_unset=True)
+            version = fields.pop("expected_version")
+            planning.confirm_goal(goal_id, version, **fields)
             return planning.describe(goal_id)
 
         def planning_run(goal_id, body, mode):
@@ -540,6 +563,7 @@ def create_app(
                 user_text="澄清目标" if mode == "clarify" else "生成图谱", mode=mode,
                 idempotency_key=body.request_id, retry_of_run_id=body.retry_of_run_id,
                 planning_version=body.expected_version, graph_node_count=getattr(body, "node_count", 10),
+                graph_feedback=getattr(body, "feedback", ""),
             )))
 
         @app.post("/api/goals/{goal_id}/clarify", status_code=202, response_model=PublicRun, response_model_exclude_unset=True)

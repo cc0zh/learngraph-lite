@@ -1,4 +1,5 @@
-export interface Goal { title: string; desired_outcome: string; current_level: string; time_budget_minutes: number | null; constraints: string; confirmed: boolean; assumptions?: string[] }
+export type ClarificationField = 'desired_outcome' | 'current_level' | 'time_budget_minutes';
+export interface Goal { title: string; desired_outcome: string; current_level: string; time_budget_minutes: number | null; constraints: string; confirmed: boolean; assumptions?: string[]; skipped_fields?: ClarificationField[] }
 export interface CitationSource { id: string; document_id: string; document_version: number; chunk_id: string; quote: string; start_offset: number; end_offset: number; page_number: number | null; heading: string | null; text_hash: string; status: 'valid' | 'stale' | 'unavailable'; cited: boolean }
 export interface RunOutput extends Record<string, unknown> { citation_map?: Record<string, CitationSource>; unverified_citation_ids?: string[]; source_mode?: 'general' | 'documents' }
 export interface GraphNode { id: string; title: string; explanation: string; learning_outcome: string; estimated_minutes: number; priority: number; citation_ids: string[] }

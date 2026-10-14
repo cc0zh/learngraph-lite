@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { writeFileSync } from 'node:fs';
 
-test('real P0: UI create → clarify → confirm → graph review → teach/tool → answer → recommendation → reload', async ({ page }) => {
+test('real P0: UI create → guided summary → confirm → stage review → teach/tool → answer → recommendation → reload', async ({ page }) => {
   const report: Record<string, unknown> = { mode: 'real', scope: 'browser P0', started_at: new Date().toISOString(),
     checks: [], runs: [], limitations: ['one small sample, not 20-case model quality evaluation', 'no real failure/cancel/retry coverage'] };
   const checks = report.checks as string[];
@@ -24,22 +24,27 @@ test('real P0: UI create → clarify → confirm → graph review → teach/tool
     await expect(page.getByText('Real · 模型已配置')).toBeVisible();
     await page.getByLabel('你想学会什么？').fill('理解 Python 列表与元组的区别（真实浏览器验收）');
     await page.getByRole('button', { name: '开始规划' }).click();
-    await expect(page.getByRole('heading', { name: '规划你的学习路线' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '学习目标', level: 2 })).toBeVisible();
     report.goal_id = page.url().split('/goals/')[1].split('/')[0];
     checks.push('browser-created-goal');
-    await page.getByRole('button', { name: '获取澄清问题' }).click();
-    await expect(page.getByText('先明确这几件事')).toBeVisible();
-    await page.getByLabel('期望成果').fill('能解释可变性差异，并为简单场景选择列表或元组');
-    await page.getByLabel('已有基础').fill('会 Python 变量与基本语法');
-    await page.getByLabel('可投入时间').fill('60');
-    await page.getByRole('button', { name: '保存目标信息' }).click();
-    await expect(page.getByRole('button', { name: '确认已保存目标' })).toBeEnabled();
-    await page.getByRole('button', { name: '确认已保存目标' }).click();
+    await expect(page.getByRole('heading', { name: '希望学到什么程度？', level: 3 })).toBeVisible();
+    await page.getByLabel('期望成果（也可以自己写）', { exact: true }).fill('能解释可变性差异，并为简单场景选择列表或元组');
+    await page.getByRole('button', { name: '下一步', exact: true }).click();
+    await page.getByLabel('已有基础（用户自述，未验证）', { exact: true }).fill('会 Python 变量与基本语法');
+    await page.getByRole('button', { name: '下一步', exact: true }).click();
+    await page.getByLabel('可投入时间（总分钟）', { exact: true }).fill('60');
+    await page.getByRole('button', { name: '下一步', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '目标摘要', level: 3 })).toBeVisible();
+    await page.getByRole('button', { name: '确认目标摘要', exact: true }).click();
+    await page.getByText('路线长度（可选）', { exact: true }).click();
     await page.getByLabel('路线节点数').selectOption('3');
     await page.getByRole('button', { name: '生成路线草稿' }).click();
+    await expect(page.getByRole('list', { name: '学习阶段', exact: true }).getByRole('listitem')).toHaveCount(3);
+    await expect(page.getByLabel('节点标题')).not.toBeVisible();
+    await page.getByText('高级：图谱与节点编辑', { exact: true }).click();
     await expect(page.getByLabel('节点标题')).toBeVisible();
     await expect(page.getByRole('button', { name: '审核完成，发布路线' })).toBeEnabled();
-    checks.push('clarification-and-explicit-confirmation');
+    checks.push('guided-questions-summary-and-single-confirmation');
     const originalTitle = await page.getByLabel('节点标题').inputValue();
     await page.getByLabel('节点标题').fill(`${originalTitle} · 人工审核`);
     await page.getByRole('button', { name: '保存路线修改' }).click();

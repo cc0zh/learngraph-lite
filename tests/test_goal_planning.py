@@ -29,6 +29,37 @@ def test_goal_confirmation_requires_title_and_positive_budget():
         raise AssertionError("zero budget should fail")
 
 
+def test_missing_goal_inputs_are_transparent_and_skips_do_not_claim_ability():
+    fields = ("desired_outcome", "current_level", "time_budget_minutes")
+    draft = build_goal_draft("学习音乐", skipped_fields=fields)
+    assumptions = " ".join(draft.assumptions)
+    assert draft.skipped_fields == fields and draft.time_budget_minutes is None
+    assert draft.desired_outcome == draft.current_level == ""
+    assert len([item for item in draft.assumptions if "主动跳过" in item]) == 3
+    assert "不假设已具备" in assumptions and "通用学习目标" in assumptions and "240 分钟" in assumptions
+    assert "四周" not in assumptions and "项目" not in assumptions
+    assert clarification_questions(draft, 0) == ()
+    assert confirm_goal(draft).skipped_fields == fields
+    self_report = build_goal_draft("学习音乐", current_level="  我已经很熟练  ")
+    assert self_report.current_level == "我已经很熟练"
+    assert any("用户自述" in item and "尚未验证" in item for item in self_report.assumptions)
+    partial = build_goal_draft("学习音乐", skipped_fields=("current_level",))
+    assert {item.field for item in clarification_questions(partial, 0)} == {"desired_outcome", "time_budget_minutes"}
+    filled = build_goal_draft("学习音乐", desired_outcome="能解释节奏", current_level="Python",
+                             time_budget_minutes=60, skipped_fields=fields)
+    assert filled.skipped_fields == () and not any("主动跳过" in item for item in filled.assumptions)
+    assert any("用户自述" in item and "尚未验证" in item for item in filled.assumptions)
+    whitespace = build_goal_draft("学习音乐", current_level="  ", skipped_fields=("current_level",))
+    assert whitespace.skipped_fields == ("current_level",)
+    for invalid in (None, "current_level", ("title",), ("current_level", "current_level"), (False,)):
+        try:
+            build_goal_draft("学习", skipped_fields=invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"invalid skipped_fields accepted: {invalid}")
+
+
 def test_planning_service_requires_confirmed_goal_before_graph_and_publishes_revision():
     service = PlanningService(InMemoryPlanningRepository())
     draft, questions = service.create_goal("g1", "四周做出 RAG 应用")

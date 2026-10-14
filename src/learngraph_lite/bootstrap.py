@@ -96,7 +96,8 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
         if request.mode == "clarify":
             result = planner.clarify(request.goal_id, request.planning_version, gateway)
         else:
-            result = planner.graph(request.goal_id, request.planning_version, request.graph_node_count, gateway)
+            result = planner.graph(request.goal_id, request.planning_version, request.graph_node_count, gateway,
+                                   request.graph_feedback)
         return DirectResult("规划建议已保存，请审核后确认或发布。", result, dict(gateway.usage))
 
     def generate(request, budget, root_task_id):
@@ -126,7 +127,7 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
                 if package.graph_content_revision != current["content_revision"]:
                     raise LessonError("outdated_lesson", "Historical lessons cannot start a new explanation.")
         elif request.mode in {"clarify", "graph"}:
-            planner.validate(request.goal_id, request.mode, request.planning_version)
+            planner.validate(request.goal_id, request.mode, request.planning_version, request.graph_feedback)
 
     handlers = {"exercise": generate, "clarify": plan, "graph": plan}
     if proposals is not None:

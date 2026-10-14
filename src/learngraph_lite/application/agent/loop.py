@@ -44,6 +44,7 @@ class RunRequest:
     explanation_slot: str | None = None
     stream: bool = False
     proposal_purpose: str = "改进学习路线"
+    graph_feedback: str = ""
 
 
 @dataclass(frozen=True)

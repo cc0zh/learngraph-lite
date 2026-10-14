@@ -241,47 +241,62 @@ test('P0: long node scopes use a persisted bounded session for chat, exercises a
 test('P0: completion and manual refresh protect dirty goal and graph edits independently', async ({ page, request }) => {
   const goal = await learningGoal(request, 'n', false);
   await page.goto(`/goals/${goal}/plan`);
+  await page.getByText('高级：图谱与节点编辑', { exact: true }).click();
   await expect(page.getByLabel('节点标题')).toHaveValue('错误与恢复');
   let release = () => {};
   const gate = new Promise<void>(resolve => { release = resolve; });
   let started = () => {};
   const refreshStarted = new Promise<void>(resolve => { started = resolve; });
   let queryCount = 0;
+  let completedQueries = 0;
   await page.route(`**/api/goals/${goal}`, async route => {
     if (route.request().method() !== 'GET') { await route.continue(); return; }
     const response = await route.fetch();
-    const value = await response.json();
     queryCount++;
     if (queryCount === 1) { started(); await gate; }
-    await route.fulfill({ json: { ...value, questions: [`已读取刷新 ${queryCount}`] } });
+    await route.fulfill({ response });
+    completedQueries++;
   });
   await page.route(`**/api/goals/${goal}/graph-drafts`, route => route.fulfill({ status: 202,
     json: { ...runDTO('graph-complete', '', 'completed'), mode: 'graph' } }));
   await page.getByRole('button', { name: '重新生成' }).click();
   await refreshStarted; // Completion-triggered read remains in flight while editing.
-  await page.getByRole('button', { name: '修改目标' }).click();
-  await page.getByLabel('期望成果').fill('本地未保存的目标成果');
   await page.getByLabel('节点标题').fill('本地未保存的节点标题');
+  await page.getByRole('button', { name: '修改目标' }).click();
+  await expect(page.getByRole('heading', { name: '目标摘要', level: 3 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '希望学到什么程度？' })).not.toBeVisible();
+  await page.getByRole('textbox', { name: '期望成果', exact: true }).fill('本地未保存的目标成果');
   release();
-  await expect(page.getByText('已读取刷新 1')).toBeVisible();
-  await expect(page.getByLabel('期望成果')).toHaveValue('本地未保存的目标成果');
+  await expect.poll(() => completedQueries).toBe(1);
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  await expect(page.getByRole('textbox', { name: '期望成果', exact: true })).toHaveValue('本地未保存的目标成果');
   await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
   await page.getByRole('button', { name: '刷新目标与路线' }).click();
-  await expect(page.getByText('已读取刷新 2')).toBeVisible();
-  await expect(page.getByLabel('期望成果')).toHaveValue('本地未保存的目标成果');
+  await expect.poll(() => completedQueries).toBe(2);
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  await expect(page.getByRole('textbox', { name: '期望成果', exact: true })).toHaveValue('本地未保存的目标成果');
   await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
   await expect(page.getByText('有未保存修改，请先保存。')).toBeVisible();
-  await page.getByRole('button', { name: '保存目标信息' }).click();
-  await expect(page.getByText('已读取刷新 3')).toBeVisible();
+  const goalWrites: string[] = [];
+  page.on('request', req => {
+    if (req.url().endsWith(`/api/goals/${goal}`) && req.method() === 'PATCH') goalWrites.push('PATCH');
+    if (req.url().endsWith(`/api/goals/${goal}/confirm`) && req.method() === 'POST') goalWrites.push('POST confirm');
+  });
+  await page.getByRole('button', { name: '确认目标摘要', exact: true }).click();
+  await expect.poll(async () => (await (await request.get(`/api/goals/${goal}`)).json()).goal.desired_outcome).toBe('本地未保存的目标成果');
+  const reconfirmed = await (await request.get(`/api/goals/${goal}`)).json();
+  expect(reconfirmed.goal.confirmed).toBe(true);
+  expect(reconfirmed.graph).toBeNull(); // Changed goals invalidate the old server route atomically.
+  expect(goalWrites).toEqual(['POST confirm']);
   await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
   await expect(page.getByText('有未保存修改，请先保存。')).toBeVisible();
-  // Saving goal information intentionally unconfirms it; reconfirm before graph save.
-  await page.getByRole('button', { name: '确认已保存目标' }).click();
-  await expect(page.getByText('已读取刷新 4')).toBeVisible();
-  await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
+  await expect(page.getByRole('button', { name: '审核完成，发布路线' })).toBeDisabled();
   await page.getByRole('button', { name: '保存路线修改' }).click();
-  await expect(page.getByText('已读取刷新 5')).toBeVisible();
   await expect(page.getByText('有未保存修改，请先保存。')).not.toBeVisible();
-  await expect(page.getByLabel('期望成果')).toHaveValue('本地未保存的目标成果');
+  await expect(page.locator('dl')).toContainText('本地未保存的目标成果');
   await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
+  await expect(page.getByRole('button', { name: '审核完成，发布路线' })).toBeEnabled();
+  const saved = await (await request.get(`/api/goals/${goal}`)).json();
+  expect(saved.graph.status).toBe('draft');
+  expect(saved.graph.nodes[0].title).toBe('本地未保存的节点标题');
 });

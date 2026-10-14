@@ -18,7 +18,7 @@ export function RunCitations({ run, goalId, nodeId }: { run: Run; goalId: string
 export function PendingRequest({ command, checked, sending, query, resend }: { command?: Command; checked: boolean; sending: boolean; query: () => void; resend: () => void }) {
   if (!command) return null;
   return <div className="hint" role="region" aria-label="未确认请求恢复"><strong>请求尚未确认</strong>
-    <p>{typeof command.body.user_text === 'string' ? command.body.user_text : command.path}</p>
+    <p>{typeof command.body.user_text === 'string' ? command.body.user_text : typeof command.body.feedback === 'string' && command.body.feedback ? command.body.feedback : command.path}</p>
     <p className="small">请求 ID：{String(command.body.request_id)}</p>
     <p>输入已保存在本浏览器。先查询运行状态，再显式重发同一请求；如果任务已存在，只恢复该任务，不重复执行。</p>
     <div className="actions"><button type="button" className="quiet" disabled={sending} onClick={query}>查询运行状态</button>

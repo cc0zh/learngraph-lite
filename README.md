@@ -174,7 +174,13 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 
 ## 目标澄清与图谱规划
 
-以下路由由real和业务fixture API 装配。创建目标后可请求模型澄清，也可直接确认并接受目标中记录的缺失信息假设。澄清仅保存问题，不代填字段、不自动确认；最多两轮，信息完整时不调用模型。每次写操作使用最新 GET 或 run 输出中的 `version`。
+UI 从一句不完整的意图开始，默认只引导成果/深度、已有基础和总投入三个问题，每问都有选项、自定义、跳过及提问理由，也可直接查看摘要。摘要展示跳过项和默认假设，可修改并一次明确确认，无需重复保存。已有基础只标作用户自述、未验证；基础未知不假设有能力，缺失成果以核心概念、主题练习及解释结果为默认目标，缺失投入暂按 240 分钟作为规划参考（原字段仍为空）。
+
+路线默认以阶段顺序、成果、必要性和预计投入呈现，包含实践/验证建议和超预算提示。反馈「太难」「太宽」「已有基础」「调整重点」可生成新草稿；高级图谱/节点编辑折叠保留，不是继续学习的前提。路线始终需要用户明确点击发布，生成和反馈不会自动发布。
+
+此增量的实施与验收记录见[引导式规划计划](docs/exec-plans/completed/guided-planning.md)，区别于文首的历史阶段验收。
+
+以下路由由real和业务fixture API 装配。保留的模型澄清 API 仅保存问题，不代填字段、不自动确认；最多两轮，已提供或已跳过的信息不再追问。每次写操作使用最新 GET 或 run 输出中的 `version`。
 
 | 方法与路径 | body / 结果 |
 | --- | --- |
@@ -183,14 +189,16 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 | GET /api/goals/{goal_id} | 当前目标、问题、图谱及 version |
 | PATCH /api/goals/{goal_id} | `{"expected_version":0,"current_level":"会 Python"}`；撤销确认、清空旧草稿与问题，保留累计澄清轮次 |
 | POST /api/goals/{goal_id}/clarify | `{"request_id":"clarify-1","expected_version":1}`，返回 202 run |
-| POST /api/goals/{goal_id}/confirm | `{"expected_version":2}`，显式确认 |
-| POST /api/goals/{goal_id}/graph-drafts | `{"request_id":"graph-1","expected_version":3}`，返回 202 run；node_count 可选，默认 10、限 1–30 |
+| POST /api/goals/{goal_id}/confirm | `{"expected_version":2}` 仍有效；也可携带 title、desired_outcome、current_level、time_budget_minutes、constraints、skipped_fields，一次保存并显式确认 |
+| POST /api/goals/{goal_id}/graph-drafts | `{"request_id":"graph-1","expected_version":3}`，返回 202 run；node_count 可选，默认 10、限 1–30；feedback 可选，最长 2000 字符，有反馈时要求已有草稿 |
 | GET /api/goals/{goal_id}/graph | 当前规划状态，与目标 GET 相同结构 |
 | PATCH /api/goals/{goal_id}/graph | `{"expected_version":4,"nodes":[...],"edges":[...]}`，提交完整草稿，可增删改 |
 | POST /api/goals/{goal_id}/graph/publish | `{"expected_version":5,"expected_revision":0}`，发布并初始化学习快照 |
 | GET /api/goals/{goal_id}/graph/citations/{citation_id}?version={version} | 使用当前规划 version 定位图谱原文；版本变化返回 409，需刷新图谱 |
 
 表中版本号示例按各步成功写入递增。节点要求 id、title、explanation、learning_outcome、正整数 estimated_minutes 和 0–5 priority；依赖只允许 prerequisite，source 为 target 的前置，拒绝环、自环、未知节点和重复边。结构化候选至多修复一次，模型调用/修复共享 run 预算；run 输出保存本次提交快照。推荐仍先考虑近期答错，再按优先级、预计分钟与 ID 排序。
+
+`skipped_fields` 只允许 desired_outcome、current_level、time_budget_minutes；填写字段后会清除对应跳过标记。修改目标并确认只推进一次 version；有实际目标变化才清空旧草稿。反馈和当前图谱作为业务数据进入模型上下文，重试保留完整输入；预算、取消、版本冲突、SQLite 恢复与明确发布边界保持不变。实践与验证文字是建议，不代表练习已生成或用户能力已被验证。
 
 规划任务内部按目标串行，共用全应用两并发和取消规则；公开 run 的 `task_ref` 为 `goal:{goal_id}`，不需要节点或 session_id。查询、SSE、取消与相同请求去重沿用 run API。版本过期或发布后直接覆盖返回 409，无效 body/图谱返回 422。目标 PATCH 至少包含一个字段；仅 time_budget_minutes 可用 null 清空，title 必须非空，其余文本/列表可用空字符串或空列表清空。
 

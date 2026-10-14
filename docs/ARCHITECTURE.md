@@ -84,7 +84,9 @@ Markdown 按 ATX 标题切块并忽略代码围栏，PDF 按显式页码标记�
 
 按钮 `mode=exercise` 走 Loop direct handler；教学 `mode=teaching` 注册闭包绑定节点的 `create_exercise`，调用相同用例。operation key 使用 root task、操作类型、节点、内容版本和固定 purpose slot；count/purpose 属于 fingerprint，同键不同参数冲突。失败任务显式 retry 创建新 run 并保留 root；新任务创建新 root。私有候选及修复对话不回注教学 transcript，ToolResult/公共 DTO 只含公共题目及其来源表，提交反馈才返回答案。每题和回答的 C1 独立，题目来源不能并入回答表；生成 registry 与 real API 的 root/run 均可重读恢复。
 
-`GeneratePlanning` 复用 Loop direct handler、共享 BudgetedModelGateway 与严格 Pydantic 候选。澄清只对缺失字段提问，最多两轮；图谱默认十节点，包含解释、学习结果与优先级，校验依赖和环，只保存 draft。模型调用在事务外，提交通过 planning repository `mutate` 在锁内或 SQLite `BEGIN IMMEDIATE` 中核对 expected_version、业务状态与取消；成功递增 version，失败回滚。run 输出取本次保存的快照，避免再次读取混入后续编辑。
+`GeneratePlanning` 复用 Loop direct handler、共享 BudgetedModelGateway 与严格 Pydantic 候选。澄清只对缺失且未主动跳过的字段提问，最多两轮；图谱默认十节点，包含必要性/顺序解释、可验证成果与优先级，校验依赖和环，只保存 draft。`graph_feedback` 保存为 run 输入并参与去重/重试，当前草稿与用户反馈作为业务数据进入模型上下文，不能自动发布。模型调用在事务外，提交通过 planning repository `mutate` 在锁内或 SQLite `BEGIN IMMEDIATE` 中核对 expected_version、业务状态与取消；成功递增 version，失败回滚。run 输出取本次保存的快照，避免再次读取混入后续编辑。
+
+React 规划默认使用三个有界引导问题和可编辑摘要；confirm API 可在一个 mutate 中合并摘要并明确确认，不要求先 PATCH 再确认。跳过字段独立保存在 GoalDraft JSON，填写后清除；assumptions 是派生说明，SQLite 读取重建以避免旧“有能力/四周”假设进入生成上下文。自述基础始终未验证，不修改学习掌握状态。路线阶段用稳定拓扑排序投影现有节点、显示总投入与实践验证建议；图谱/优先级/依赖编辑放入可选高级区。读取请求序号和目标/图谱独立 dirty 保护继续生效；确认响应丢失时，仅在读到与本地输入完全相同的已确认摘要后解除目标门禁，不再次提交确认。增量验收见[引导式规划计划](exec-plans/completed/guided-planning.md)。
 
 planning version 覆盖目标/问题/草稿的每次写入，graph revision/content_revision 则沿用领域发布/提案语义。发布同时核对 planning version 与 graph revision；HTTP/模型拒绝覆盖 published，内部旧 update_node/add_dependency 仍保留转回 draft 的兼容行为。real/业务 fixture 在发布后及启动时调用 `ensure_goal`，仅在缺少学习状态时初始化，不覆盖已有成绩；初次发布两次写入仍非原子；提案接受已同事务显式迁移学习图谱/保留历史，语义/依赖使全局content_revision推进、旧题/包只读，metadata仅推进revision。
 
