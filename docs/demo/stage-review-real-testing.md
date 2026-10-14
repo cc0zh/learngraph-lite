@@ -1,20 +1,32 @@
 # 阶段总结与真实测试
 
-本次继续推进到“运行恢复与事件解释”切片结束处，后续开发暂缓，供阶段总结和真实测试；完整 P0/P1/M5 尚未验收。实现和验证证据集中维护在[执行计划](../exec-plans/active/learngraph-lite-implementation.md)，本次变更见[history](../histories/2026-10/20261013-2055-run-recovery-explanations.md)。
+## P0 基线收口
+
+本轮已隔离缺配置测试对项目 `.env` 的读取，新增临时配置与进程变量优先级回归，并修复未确认请求/刷新竞态、超长 session、规划未保存编辑和 Markdown 图片外连。当前离线基线复验为 119 Python、19 Node、web build、11 P0 E2E、20/20 fixture 和仓库检查通过；真实供应商与真实 P0 验证单独记录在[执行计划](../exec-plans/active/learngraph-lite-implementation.md)文首。
+
+React P0 主要流程已实现并有 fixture 验收。P0 的实现与验证证据集中维护在执行计划；本轮变更见[history](../histories/2026-10/20261013-2115-react-p0.md)。P1 资料原文页、学习包固定组件前端、提案 HTTP/前端与 M5 完整真实评估/最终交接未完成。
 
 ## 可测试的能力与边界
 
 | 范围 | 当前状态 |
 | --- | --- |
-| 独立 Agent 内核 | 原生工具回合、严格参数、共享调用预算、取消；无 token/context/deadline 完整预算 |
+| 独立 Agent 内核 | 原生工具回合、严格参数、六次共享模型调用/八步/十二次工具调用；12,000 估算输入 token 上限与 120 秒协作 deadline 已具备，无硬中断/独立 tool timeout/完整累计 token 预算 |
 | 目标与图谱 | 目标确认、最多两轮澄清、资料型草稿生成、人工编辑和发布 HTTP |
 | 节点学习 | 上下文、资料问答、引用定位、练习生成/作答、掌握度与下一步推荐 |
 | 资料 | TXT/Markdown/文本型 PDF 上传、解析、绑定、jieba/FTS5 BM25；无 OCR |
-| 学习包 | 固定四类组件、资料 grounding、公共题卡、包版本、列表/详情/引用、事件 ACK 与解释 HTTP；ACK 与解释请求分开 |
+| 学习包 | 后端固定四类组件、资料 grounding、公共题卡、包版本、列表/详情/引用、事件 ACK 与解释 HTTP；ACK 与解释请求分开，React 固定组件与事件交互未完成 |
 | SQLite | 目标/当前图谱、资料、题目/成绩、学习包/事件，以及 real API 的 session作用域/run/root/输入/结果/事件可重开；未完成run转interrupted |
-| 尚待后续 | 有限对话历史、token/context/deadline、提案 HTTP、React、浏览器 E2E、发布恢复/成绩迁移和 M5 真实评估交接 |
+| P0 浏览器验收 | 上轮 React fixture 主流程：目标创建→澄清→确认→图谱生成/编辑/发布→节点流式对话→按钮练习作答→反馈→刷新恢复→停止/重试；375/768/1024/1440 响应式。对话实际工具出题与模型失败/显式重试为本轮补测，2 E2E 已通过；失败场景用 mock DTO，仅证明 UI/重试协议 |
 
-离线验证已通过111个Python、19个Node测试、20/20 fixture评估及三个fixture/demo命令。模型测试使用模拟gateway；不代表真实供应商兼容、生成质量或引用语义支持。真实调用本次未执行。关闭测试主动触发的graceful timeout/CancelledError、TestClient弃用提示与smoke终端中文乱码仍有记录。
+模型协议测试使用 MockTransport，失败/重试与部分浏览器边界使用 mock DTO，浏览器主闭环使用 fixture；这些离线证据不代表真实供应商兼容、生成质量或引用语义支持。新增回归覆盖未送达/响应丢失、同 ID 恢复、查询门禁、旧历史竞态、422/409解锁、超长节点和 dirty 编辑；真实验证另列，不混算到11个离线 E2E。
+
+## 先启动业务 UI（无需 Key）
+
+运行 `npm run dev`（Windows 可用 `npm.cmd run dev`），打开 <http://127.0.0.1:5173>。它同时启动 Vite 和 SQLite 业务 fixture API，页面必须标记 fixture；独立 `npm run dev:api` 仅演示 echo run 协议，不提供业务 UI 验收。配置好下面的真实模型变量后，可用 `npm run dev -- --real` 启动付费真实业务 UI；真实供应商尚未验证。
+
+本轮浏览器补测重点：节点聊天 body 使用 mode: teaching，界面恢复 teaching 会话；要求出题后检查实际 create_exercise 工具活动和已保存题目，不接受仅口头答复；模型失败时明确显示 failed，并用新 request_id、原 retry_of_run_id/session/输入显式重试，刷新后仍能看到教学对话与题目/反馈。专项结果已记入计划；失败场景使用 mock 失败/完成 DTO，不等价于真实模型证据，其余验收仍待补录。
+
+按 session、同 mode 恢复 completed 回合的完整协议历史；不是只保存最终文本，也不恢复半截流。最近运行窗口和 12k 估算输入预算限制模型输入，裁剪按完整用户回合进行。120 秒 deadline 只在协作检查点阻止继续，不能硬打断阻塞工具/网络；供应商 timeout 与单次输出上限不等于完整 run token/time 硬预算。
 
 ## 先验证供应商和资料问答
 
@@ -25,10 +37,11 @@ $env:MODEL_API_KEY = '<你的 API Key>'
 $env:MODEL_NAME = '<模型名>'
 # 可选：$env:MODEL_BASE_URL = 'https://供应商地址/v1'
 npm.cmd run smoke:real
+npm.cmd run smoke:p0:real
 npm.cmd run demo:learning-agent -- --real
 ```
 
-第一条只验证普通回答与原生 echo 工具回合；第二条用fixture初始化的临时SQLite数据进行真实资料问答，不测试图谱、出题或学习包生成。成功后仍需下面的业务手测。
+第一条只验证普通回答与原生 echo 工具回合；第二条使用全新独立 SQLite 验证真实 P0 HTTP 旅程（最多12次模型请求，报告默认留在 `.local`，不进入默认 CI）；第三条用 fixture 初始化的临时 SQLite 数据进行真实资料问答，不测试图谱、出题或学习包生成。P0 HTTP 不等于真实浏览器 E2E，也不包含 P1 引用/学习包质量；成功后仍需下面的业务手测。
 
 ## 启动 API 并测试学习包
 
@@ -118,4 +131,4 @@ $retry | ConvertTo-Json -Depth 20
 | 恢复与降级 | 重启可读包/事件/旧run/SSE，未完成run转interrupted且不自动调用模型；在独立测试资料上解绑/删除后引用定位409 |
 | 真实内容质量 | 记录错误引用、无依据结论、题目歧义、组件重复与学习目标偏离；程序校验通过不代表内容合格 |
 
-记录供应商、模型名、测试日期、非敏感配置、run/package ID、状态/usage和具体问题即可；区分真实调用与fixture数据，说明哪些业务未测。该阶段没有React页面，测试入口为OpenAPI、HTTP/SSE和命令行；暂缓事项不计作已完成。
+记录供应商、模型名、测试日期、非敏感配置、run/package ID、状态/usage和具体问题即可；区分真实调用与 fixture 数据，说明哪些业务未测。React P0 的自动化入口是 npm.cmd run test:e2e，真实业务内容仍以 OpenAPI/HTTP/SSE 和人工检查为准；fixture E2E 不等价于真实模型验收。

@@ -47,3 +47,7 @@ venv/
 # Misc generated artifacts
 *.swp
 *.swo
+
+# Browser verification output
+playwright-report/
+test-results/

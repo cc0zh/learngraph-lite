@@ -77,6 +77,13 @@ class LearningService:
     def start_goal(self, graph: GraphSnapshot) -> None:
         self._repository.save(graph.goal_id, LearningState(graph=graph))
 
+    def ensure_goal(self, graph: GraphSnapshot) -> None:
+        """Recover publication interrupted before initial learning state was saved."""
+        try:
+            self._repository.get(graph.goal_id)
+        except KeyError:
+            self.start_goal(graph)
+
     def validate_lesson_exercises(self, package: LessonPackage) -> None:
         state = self._repository.get(package.goal_id)
         _require_node(state.graph, package.node_id)

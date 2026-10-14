@@ -93,6 +93,59 @@ class OpenAIChatGateway:
     def close(self) -> None:
         self._client.close()
 
+    def stream_complete(self, messages, tools, on_delta) -> ModelResponse:
+        """Aggregate native SDK tool fragments; execute only after a valid finish."""
+        text = ""
+        calls = {}
+        usage = {}
+        finish = None
+        try:
+            options = {"tools": list(tools)} if tools else {}
+            with self._client.chat.completions.create(
+                model=self._model, messages=[_message_payload(m) for m in messages],
+                max_tokens=self._max_output_tokens, stream=True,
+                stream_options={"include_usage": True}, **options,
+            ) as stream:
+                for chunk in stream:
+                    if chunk.usage is not None:
+                        usage = _usage_payload(chunk.usage)
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    if choice.delta.refusal:
+                        raise ModelGatewayError("Model declined the request")
+                    if choice.delta.content:
+                        text += choice.delta.content
+                        on_delta(choice.delta.content)
+                    for fragment in choice.delta.tool_calls or ():
+                        if fragment.type not in {None, "function"}:
+                            raise ModelGatewayError("Model returned an unsupported tool call")
+                        item = calls.setdefault(fragment.index, {"id": "", "name": "", "arguments": ""})
+                        item["id"] += fragment.id or ""
+                        if fragment.function:
+                            item["name"] += fragment.function.name or ""
+                            item["arguments"] += fragment.function.arguments or ""
+                    if choice.finish_reason:
+                        finish = choice.finish_reason
+        except APITimeoutError as exc:
+            raise ModelGatewayError("Model request timed out") from exc
+        except APIConnectionError as exc:
+            raise ModelGatewayError("Model provider connection failed") from exc
+        except APIStatusError as exc:
+            raise ModelGatewayError(f"Model provider returned HTTP {exc.status_code}") from exc
+        except APIError as exc:
+            raise ModelGatewayError("Model provider returned an invalid response") from exc
+        if finish not in {"stop", "tool_calls"}:
+            raise ModelGatewayError(f"Model stream stopped: {finish or 'incomplete'}")
+        tool_calls = tuple(ToolCall(**item) for _, item in sorted(calls.items()))
+        if any(not c.id or not c.name or not c.arguments for c in tool_calls):
+            raise ModelGatewayError("Model returned an invalid tool call")
+        if len({c.id for c in tool_calls}) != len(tool_calls):
+            raise ModelGatewayError("Model returned duplicate tool call IDs")
+        if not text and not tool_calls:
+            raise ModelGatewayError("Model returned an empty response")
+        return ModelResponse(text, tool_calls, usage)
+
 
 def _message_payload(message: TextMessage) -> dict[str, Any]:
     if message.role == "assistant" and message.tool_calls:

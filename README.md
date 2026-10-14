@@ -2,11 +2,11 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库已建立 Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、学习领域规则、资料/学习页/图谱提案离线切片、planning/document/learning/lesson/run 的 SQLite 持久化、FastAPI run 生命周期与实时 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清/图谱规划 HTTP、节点上下文、下一步推荐、资料上传/PDF 解析、中文 BM25 检索、回答引用和资料型图谱/练习/学习包生成、事件 ACK 与解释 HTTP。运行恢复与事件解释阶段已收尾，暂缓后续开发，供阶段总结与真实测试；[测试指南](docs/demo/stage-review-real-testing.md) 提供入口和验收边界。React、有限对话历史、提案 HTTP 与 M5 最终交接尚未完成。
+当前仓库已实现 React P0 主要闭环：Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、planning/document/learning/lesson/run 的 SQLite 持久化、FastAPI run 生命周期与 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清、图谱规划/编辑/发布、节点学习、练习反馈、掌握度推荐和业务 HTTP。React 前端覆盖首页、目标澄清确认、图谱编辑发布、节点对话、文本流/工具状态/停止/重试、练习反馈、进度推荐和 SQLite 刷新恢复；[测试指南](docs/demo/stage-review-real-testing.md) 记录 fixture 验收与真实供应商边界。本轮修复 `.env` 测试污染、未确认请求恢复、刷新竞态、超长 session 与 Markdown 图片外连；Python 119、Node 19、web build、E2E 11、离线评估 20/20、文档/仓库检查均通过。真实供应商验证正在独立推进；P1 资料原文页、学习包固定组件前端、提案 HTTP/前端和 M5 最终交接仍未完成。
 
 ## 开发准备
 
-需要 Node.js 22+、Python 3.13+、uv、Git；完整打包还需要 tar。后端依赖固定在 pyproject.toml 和 uv.lock；当前没有 npm 第三方依赖安装步骤。
+需要 Node.js 22.12+、Python 3.13+、uv、Git；完整打包还需要 tar。后端依赖固定在 pyproject.toml 和 uv.lock，前端依赖固定在 npm workspace 的 package-lock.json。首次使用执行 `npm install` 和 `uv sync --locked --group dev`。
 
 先安装锁定的 Python 开发依赖：
 
@@ -21,7 +21,26 @@ Windows 常用入口：
 
 macOS/Linux 使用 npm。Windows 环境问题见 docs/WINDOWS.md。
 
-## 启动本地 fixture API
+## 启动 React 业务 UI
+
+完成依赖安装后，默认无 Key 启动：
+
+```powershell
+# Windows 使用 npm.cmd；macOS/Linux 使用 npm。
+npm run dev
+```
+
+打开 <http://127.0.0.1:5173>；此入口同时启动 Vite 和 SQLite 业务 fixture API（127.0.0.1:8000），覆盖目标、图谱、节点学习与练习业务。页面明确标记 fixture，不调用真实供应商；它与下述独立 echo 协议 fixture 不是同一入口。
+
+需要真实模型时，先按下文真实模式配置环境变量，再运行：
+
+```powershell
+npm run dev -- --real
+```
+
+这是可能产生费用的真实业务 UI，不是 fixture。缺少 Key 或模型名时后端启动失败；配置状态不证明供应商连通，真实供应商尚未验证。Vite 将 /api 代理到本机后端，浏览器仍按同源写请求访问。停止使用 Ctrl+C。
+
+## 启动独立 echo fixture API
 
 Windows PowerShell：
 
@@ -50,18 +69,19 @@ curl.exe -N "http://127.0.0.1:8000/api/runs/$($run.run_id)/events"
 
 提交返回 202；同 session/request_id 和相同输入复用原 run，不同输入返回 409。停止使用 `POST /api/runs/:id/cancel`。同 session 只允许一个正在执行的 run，全应用最多两个。取消会结束公开状态；阻塞调用实际退出前仍占用名额。关闭入口给活跃 HTTP/SSE 连接最多 2 秒结束，再进入应用协作取消并等待后台调用退出。
 
-HTTP 只接受 localhost、127.0.0.1 和 ::1 的 Host；浏览器写请求必须同源。没有 Origin 的本地命令行请求可用。未来前端通过 Vite 代理同源调用；当前不启用跨源访问。
+HTTP 只接受 localhost、127.0.0.1 和 ::1 的 Host；浏览器写请求必须同源。没有 Origin 的本地命令行请求可用。React 前端通过 Vite 代理同源调用；当前不启用跨源访问。
 
-SSE 首帧是 `run.snapshot`，随后接收新生命周期事件和心跳；重连获取当前快照，不重放历史事件。连接断开不取消任务。当前只支持生命周期流，未接入 token 流。fixture API 使用内存运行状态，未连接学习业务 repository；下面的 real API 持久化运行状态与 session 作用域。
+SSE 首帧为 `run.snapshot`，随后接收有界 token/tool 状态和生命周期事件；事件带递增 cursor，重连可按 cursor 补发缺口并获取当前快照。连接断开不取消任务。fixture API 使用内存运行状态，业务 fixture 入口使用 SQLite；real API 持久化运行状态与 session 作用域。
 
 ## 启动真实模型 API
 
-使用独立入口，后端从环境变量读取配置；缺少 Key 或模型名时启动失败。先执行上述 `uv sync --locked --group dev`，再在 PowerShell 中设置：
+使用独立入口，后端从当前进程环境变量和项目根目录 `.env` 读取配置；进程环境变量优先，缺少 Key 或模型名时启动失败。`.env` 不提交 Git。先执行上述 `uv sync --locked --group dev`，再编辑 `.env`：
 
 ```powershell
-$env:MODEL_API_KEY = '<你的 API Key>'
-$env:MODEL_NAME = '<支持 Chat Completions 和 function tool calling 的模型名>'
-# 可选：$env:MODEL_BASE_URL = 'https://供应商地址/v1'
+# .env
+MODEL_API_KEY=<你的 API Key>
+MODEL_NAME=<支持 Chat Completions 和 function tool calling 的模型名>
+# 可选：MODEL_BASE_URL=https://供应商地址/v1
 npm.cmd run dev:api:real
 ```
 
@@ -69,9 +89,11 @@ macOS/Linux 对应设置 `export MODEL_API_KEY='...'` 和 `export MODEL_NAME='..
 
 real API 使用相同的提交/查询/SSE 路径，`/api/model/status` 返回 `mode: real`、`configured: true`，只表示配置已装配，不表示供应商连通或认证成功。不带目标/节点的请求使用普通回答与协议验证 `echo`；带作用域的请求装配节点上下文，注册 `get_learning_context`、`get_next_action`、`search_documents` 和 `read_document_chunk`。SDK 隐式重试关闭，应用关闭会先等待工作线程退出再关闭客户端；fixture API 仍只用于协议演示。
 
-real API 将请求输入、session 作用域、root task、结果/usage 与递增事件保存到同一 SQLite。`GET /api/sessions/{session_id}/runs` 可查询该会话的运行记录，旧 run ID 在重启后仍可查询并获取 SSE 快照。启动把遗留 queued/running 标为 interrupted，不自动重新调用模型；显式 retry 使用新 request_id 和原 retry_of_run_id，并保持原 session、作用域与输入。已完成任务不能 retry。这里持久化运行记录，不组装历史对话；同数据库只支持一个 API 进程。
+real API 将请求输入、session 作用域、root task、结果/usage 与递增事件保存到同一 SQLite。`GET /api/sessions/{session_id}/runs` 可查询该会话的运行记录，旧 run ID 在重启后仍可查询并获取 SSE 快照。启动把遗留 queued/running 标为 interrupted，不自动重新调用模型；显式 retry 使用新 request_id 和原 retry_of_run_id，并保持原 session、作用域与输入。已完成任务不能 retry。节点对话按同 session、同 mode 恢复已完成回合的完整 user/assistant/tool 协议历史；仅取最近运行窗口并按输入预算裁剪，不自动续跑未完成任务。同数据库只支持一个 API 进程。
 
 配置完成后可手动运行 `npm.cmd run smoke:real`（macOS/Linux 使用 `npm run smoke:real`）。它会产生真实 API 请求和费用，依次验证普通回答、原生 echo 调用及工具结果后的回答；不进入默认 CI。本次尚未执行真实供应商 smoke，离线 SDK 协议测试不能替代这项证据。
+
+供应商协议通过后，可用 `npm.cmd run smoke:p0:real` 验证一条真实 P0 HTTP 旅程：澄清、确认、三节点图谱生成/人工编辑发布、教学工具出题、正式作答/掌握度/推荐、按钮出题、请求/交卷去重和 SQLite 重开。它实际调用模型，整条旅程最多12次请求；使用新建 `.local/real-p0-*.sqlite3`，不修改日常数据库，重开阶段禁止模型调用。脱敏 JSON 证据在 `.local/real-p0-*.json`，不保存 Key 或模型原文。可传 `-- --database .local/my-real-p0.sqlite3 --report .local/my-real-p0.json`，已有文件会拒绝覆盖。此入口不是浏览器 E2E，也不是生成质量/稳定性评估；两类证据分别记录。
 
 ## 复现节点学习 Agent
 
@@ -108,7 +130,7 @@ Invoke-RestMethod "http://127.0.0.1:8000/api/runs/$($run.run_id)/citations/C1"
 
 `goal_id` / `node_id` 必须一起提供，同 session 绑定同一个目标/节点；换节点需新 session。上下文包含已确认目标、发布版本、当前节点、直接前置依赖与练习表现，不包含私有答案。推荐针对整个目标，使用已有服务端规则；`available_minutes` 可省略，提供时必须为正整数。节点不存在返回 404，未发布/未初始化/版本过期的只读请求返回 409；run 内装配失败记录为 `failed`。图谱变化不会自动清空或迁移学习成绩，需后续显式同步用例。
 
-每轮独立装配工具与上下文，工具参数不接受目标/节点改写。资料只检索当前目标和节点均显式绑定的文档；`read_document_chunk` 只接受本轮检索返回的 `citation_id`。默认 `mode: runner` 使用只读工具，real API 的显式 `mode: teaching` 增加 `create_exercise` 和 `create_lesson`。目前不读取历史对话。可手动使用 `npm.cmd run demo:learning-agent -- --real` 调配置好的供应商，可能产生费用，业务数据仍是 fixture；真实模式只执行资料问答，本次未执行。
+每轮独立装配工具与上下文，工具参数不接受目标/节点改写。资料只检索当前目标和节点均显式绑定的文档；`read_document_chunk` 只接受本轮检索返回的 `citation_id`。默认 `mode: runner` 使用只读工具，real API 的显式 `mode: teaching` 增加 `create_exercise` 和 `create_lesson`。同 session、同 mode 的 completed 回合可恢复完整协议历史（保留 assistant tool_calls/tool_call_id 配对），失败、取消或未完成回合不纳入下一轮历史；模型输入会裁剪最旧的完整回合。可手动使用 `npm.cmd run demo:learning-agent -- --real` 调配置好的供应商，可能产生费用，业务数据仍是 fixture；真实模式只执行资料问答，本次未执行。
 
 完成的节点回答在 GET run 与 SSE 中返回 `output.citation_map` 和 `output.unverified_citation_ids`。C1 等编号仅在本轮有效，来源记录含文档/片段 ID、版本、引用位置、内容摘要值、是否被引用及 `valid/stale/unavailable` 状态。未知编号保留为未验证，不提供来源；引用原文接口未知返回 404，内容变化或解绑返回 409。上面原文命令仅在本轮确实返回 C1 时可用。GET run 保留完成时快照，点击原文重新校验当前绑定和内容；无绑定/空召回要求明确说明资料不足，普通知识解释标注“非基于上传资料”。
 
@@ -140,7 +162,7 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 
 上传返回 202，状态依次为 uploaded、parsing，终态为 ready/failed/unsupported。扫描 PDF 为 unsupported/needs_ocr；加密、坏 PDF、坏编码和不可读文本也明确拒绝，不支持 OCR、Office 文件。重启把未完成解析标为 failed/interrupted；`POST /api/documents/{id}/reparse` 复用原文件，ready 时返回已有结果。解析成功状态与全文/chunk/FTS 在同一事务提交，只有 ready 上传可检索。
 
-`DELETE /api/goals/{goal_id}/document-bindings` 使用相同 JSON body 解绑；解绑目标也移除它的节点绑定。`DELETE /api/documents/{id}` 删除原文件、索引及所有绑定，晚到解析结果不会恢复已删除资料，历史来源点击降级为 unavailable。chunk 接口每页最多 50 块，返回页码或 heading、原文 offsets 和 SHA256；节点 Agent、图谱、练习和学习包复用这些资料，各自保存来源表。React 原文页仍待实现。
+`DELETE /api/goals/{goal_id}/document-bindings` 使用相同 JSON body 解绑；解绑目标也移除它的节点绑定。`DELETE /api/documents/{id}` 删除原文件、索引及所有绑定，晚到解析结果不会恢复已删除资料，历史来源点击降级为 unavailable。chunk 接口每页最多 50 块，返回页码或 heading、原文 offsets 和 SHA256；节点 Agent、图谱、练习和学习包复用这些资料，各自保存来源表。React 原文页仍待后续 P1。
 
 启动必须有 SQLite FTS5。若报错 `SQLite FTS5 is required`，安装 Python 3.13+ 的官方发行版（含 FTS5）并用该解释器重新创建项目虚拟环境、执行 `uv sync --locked --group dev`；可用 `uv run --locked python -c "import sqlite3; sqlite3.connect(':memory:').execute('create virtual table probe using fts5(text)'); print('FTS5 OK')"` 验证。当前解析恢复按单个 API 进程使用同一数据库设计。
 
@@ -170,11 +192,11 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 
 图谱 GET 动态更新来源 valid/stale/unavailable；定位使用当前 planning version，当前仅持久化一份图谱快照，旧 version 返回 409。HTTP/模型不能覆盖已发布路线，后续修改需走已有离线提案用例（提案 HTTP 待接）。内部兼容方法 update_node/add_dependency 仍可把发布快照转回草稿，不能视为公开产品入口。
 
-目标、问题和图谱可从 SQLite 重启恢复，旧快照启动时补默认字段；real API 的 run/root/请求去重也可恢复。未提交失败可用新 request_id 和 retry_of_run_id 重试；取消与提交存在窄窗口，取消后先 GET 最新规划，版本改变时需重新审核并创建新任务，不能盲用旧版本重试。发布与学习初始化分属两次仓库写入，进程中断可能留下已发布但未初始化的状态；当前会拒绝节点上下文，尚无自动恢复/成绩迁移协议。
+目标、问题和图谱可从 SQLite 重启恢复，旧快照启动时补默认字段；real API 的 run/root/请求去重也可恢复。未提交失败可用新 request_id 和 retry_of_run_id 重试；取消与提交存在窄窗口，取消后先 GET 最新规划，版本改变时需重新审核并创建新任务，不能盲用旧版本重试。发布与学习初始化分属两次仓库写入，进程中断可能留下已发布但未初始化的状态；启动通过 `ensure_goal` 仅补建缺失的学习状态，不覆盖已有成绩。跨仓库原子发布与图谱变更后的成绩迁移仍未具备。
 
 ## 生成练习与作答
 
-real API 的按钮出题入口是 `POST /api/goals/{goal_id}/nodes/{node_id}/exercises`，body 为 `{"session_id":"practice-1","request_id":"generate-1","count":1,"purpose":"practice"}`，题量限 1–3，返回 202 run；查询和 SSE 沿用 `/api/runs/{run_id}`。教学对话在节点 run body 中设置 `mode: teaching`，与按钮共用 `GenerateExercise`。fixture HTTP 启动入口仍只有 echo；离线闭环使用上面的 demo。
+real API 的按钮出题入口是 `POST /api/goals/{goal_id}/nodes/{node_id}/exercises`，body 为 `{"session_id":"practice-1","request_id":"generate-1","count":1,"purpose":"practice"}`，题量限 1–3，返回 202 run；查询和 SSE 沿用 `/api/runs/{run_id}`。教学对话在节点 run body 中设置 `mode: teaching`，与按钮共用 `GenerateExercise`。`npm run dev` 使用 SQLite 业务 fixture，独立 `dev:api` 才仅用于 echo 协议演示；上面的 demo 也可离线复现闭环。
 
 `GET` 同一节点 exercises 路径列出当前内容版本题目；`GET /api/goals/{goal_id}/exercises/{exercise_id}` 读取公共题目。提交 `POST /api/goals/{goal_id}/exercises/{exercise_id}/attempts`，body 为 `{"submission_id":"answer-1","selected_option_id":"b"}`。题目、工具结果、run 与 SSE 不包含正式答案/解析；提交反馈才返回。重复 submission 同输入返回原结果，不同输入返回 409；同题仅首次作答计入掌握度，旧版本拒绝作答。
 
@@ -182,7 +204,7 @@ real API 的按钮出题入口是 `POST /api/goals/{goal_id}/nodes/{node_id}/exe
 
 `GET /api/goals/{goal_id}/exercises/{exercise_id}/citations/{citation_id}` 定位该题原文。题目 GET 动态返回来源状态与 unverified_citation_ids，解绑/删除/内容变化后定位返回 409，未知编号返回 404。图谱、每题与回答的 C1 分别属于各自产物，不能用回答的 output.citation_map 定位题目引用。程序只校验来源存在、绑定、版本/hash/位置；引用是否支持内容仍需语义评估，尚无真实模型验证。
 
-operation 与题目（含来源表）持久化于 SQLite；run/root 关联仍仅在当前进程可查询，重启后不能用旧 run ID 重试。当前只有调用次数/步骤/工具次数和协作取消限制，完整 token/context/deadline 预算及跨 planning/learning/document 事务仍待完成。
+operation 与题目（含来源表）、业务 API 的 run/root/session/协议历史均持久化于 SQLite；重启后可查询旧 run 并显式 retry，启动不自动执行模型。预算已有六次共享模型调用、八步、十二次工具调用、每次请求 12,000 估算输入 token 限制和 120 秒协作 deadline；输入按 UTF-8 bytes/3 估算（含工具 schema），并非供应商 tokenizer。最旧历史按完整回合裁剪，必要业务上下文和当前输入仍超限则拒绝调用。deadline 在协作检查点生效，不能硬打断阻塞模型/工具；独立 tool timeout、实际累计输入/输出 token 硬预算和跨 planning/learning/document 事务仍不具备。
 
 ## 生成学习包与事件 ACK
 
@@ -212,18 +234,21 @@ schema_version 1 支持 markdown、quiz_choice、stepper、comparison_table，�
 }
 ```
 
-路径为 `POST /api/sessions/{session_id}/runs`，返回202；解释不接受客户端 user_text，服务端从已保存事件、包和公共题目构造输入。首次 run、初始输入与 `(goal_id, event_id, slot)` 关联在同一 SQLite 短事务提交，模型执行在事务外。同事件/slot 用新 request_id 仍返回最近一次 attempt，跨 session 或不同输入冲突；新 slot 创建新逻辑任务。失败/取消/中断不会因换 request_id 自动执行，须显式提供 `retry_of_run_id`，保留 root 和原输入。原始 request_id 始终指向原 attempt；业务去重返回的额外 request_id 不另存别名。学习上下文过期时拒绝新解释，历史已完成结果仍可读取。React 渲染仍待后续，不宣称 M4B 全部完成。
+路径为 `POST /api/sessions/{session_id}/runs`，返回202；解释不接受客户端 user_text，服务端从已保存事件、包和公共题目构造输入。首次 run、初始输入与 `(goal_id, event_id, slot)` 关联在同一 SQLite 短事务提交，模型执行在事务外。同事件/slot 用新 request_id 仍返回最近一次 attempt，跨 session 或不同输入冲突；新 slot 创建新逻辑任务。失败/取消/中断不会因换 request_id 自动执行，须显式提供 `retry_of_run_id`，保留 root 和原输入。原始 request_id 始终指向原 attempt；业务去重返回的额外 request_id 不另存别名。学习上下文过期时拒绝新解释，历史已完成结果仍可读取。React 已覆盖 P0 节点对话与练习反馈；M4B 原文资料查看仍待后续 P1。
 
 ## 常用命令
 
 - npm.cmd run ci
 - npm.cmd run test
 - npm.cmd run test:py
+- npm.cmd run dev
+- npm.cmd run dev -- --real
 - npm.cmd run dev:api
 - npm.cmd run dev:api:real
 - npm.cmd run check:py-boundaries
 - npm.cmd run smoke:fixture
 - npm.cmd run smoke:real
+- npm.cmd run smoke:p0:real
 - npm.cmd run eval:offline
 - npm.cmd run demo:fixture
 - npm.cmd run demo:learning-agent
@@ -235,7 +260,7 @@ schema_version 1 支持 markdown、quiz_choice、stepper、comparison_table，�
 - src/learngraph_lite/application/：应用编排。当前 AgentLoop 负责 run 准入、幂等、预算注入、运行摘要、公共事件和终态。
 - src/learngraph_lite/domain/：学习领域纯规则，例如图谱校验和掌握度计算。
 - src/learngraph_lite/presentation/：包含公共 run DTO、SSE 编码、FastAPI run/会话运行列表路由、目标澄清/图谱规划、资料上传/绑定/检索、节点只读接口、练习生成/作答、学习包及事件 ACK/解释接口；HTTP 调用应用层用例。
-- src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson/run 的 SQLite repository、jieba/FTS5 BM25 检索、pypdf 子进程解析与官方 OpenAI SDK Chat Completions gateway；完整业务持久化和前端原文页仍待接入。
+- src/learngraph_lite/infrastructure/：基础设施适配器。当前包含 planning/document/learning/lesson/run 的 SQLite repository、jieba/FTS5 BM25 检索、pypdf 子进程解析与官方 OpenAI SDK Chat Completions gateway；业务状态已持久化，完整 schema 迁移与 P1 前端原文页/学习包固定组件/提案入口仍待完成。
 
 更多边界见 docs/ARCHITECTURE.md。
 

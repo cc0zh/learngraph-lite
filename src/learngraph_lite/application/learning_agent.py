@@ -26,7 +26,7 @@ LEARNING_INSTRUCTIONS = """你是 LearnGraph Lite 的节点学习助手。用中
 get_learning_context 可读取当前节点与表现；get_next_action 返回整个目标的下一步推荐。
 推荐、掌握度与成绩以服务端工具结果为依据，不编造已掌握、已判分或已保存的状态。
 工具出错时说明限制，不把失败当作成功。
-本轮只包含当前输入，不假定知道之前的对话。"""
+可使用服务端提供的当前 session 最近完整回合；不假定知道其他会话。"""
 
 
 class LearningContextError(ValueError):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -42,6 +42,7 @@ class RunRequest:
     lesson_exercise_ids: tuple[str, ...] = ()
     source_event_id: str | None = None
     explanation_slot: str | None = None
+    stream: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,11 @@ class RunRecord:
     task_ref: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    user_text: str = ""
+    mode: str = "runner"
+    partial_text: str = ""
+    tool_activity: dict[str, dict] = field(default_factory=dict)
+    protocol_messages: list[dict] = field(default_factory=list)
 
 
 class RunRepository(Protocol):
@@ -200,7 +206,8 @@ class AgentLoop:
                    for record in self._records_by_id.values()):
                 raise RunAdmissionError("invalid_retry", "this task already has a completed run")
         record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued",
-                           goal_id=request.goal_id, node_id=request.node_id, task_ref=request.task_ref)
+                           goal_id=request.goal_id, node_id=request.node_id, task_ref=request.task_ref,
+                           user_text=request.user_text if request.mode in {"runner", "teaching"} else "", mode=request.mode)
         record.root_task_id = root_task_id or record.run_id
         if self._repository is not None:
             try:
@@ -248,7 +255,16 @@ class AgentLoop:
                 if self._prepare_run is None:
                     raise ValueError("node learning is not configured for this entry point")
                 prepared = self._prepare_run(request, budget, record.root_task_id)
-            result = prepared.runner.run(prepared.messages, budget=budget)
+            with self._condition:
+                history = []
+                for previous in self.list_runs(request.session_id)[-8:]:
+                    if previous.run_id != record.run_id and previous.status == "completed" and previous.mode == request.mode:
+                        from learngraph_lite.agent_core.models import ToolCall
+                        for item in previous.protocol_messages:
+                            history.append(TextMessage(**{**item, "tool_calls": tuple(ToolCall(**c) for c in item.get("tool_calls", ())) }))
+            messages = (*prepared.messages[:-1], *history, prepared.messages[-1])
+            result = prepared.runner.run(messages, budget=budget,
+                on_progress=(lambda kind, data: self._progress(record, kind, data)) if request.stream else None)
             output = {}
             if result.status == "completed" and prepared.project_output is not None and not budget.cancelled:
                 output = prepared.project_output(result.final_text)
@@ -257,7 +273,9 @@ class AgentLoop:
                     status = "budget_exceeded" if _is_budget_failure(result.status, result.errors) else result.status
                     error = "; ".join(result.errors)
                     self._finish(record, status, summary=_summary_for(status, replace(record, error=error)),
-                                 final_text=result.final_text, error=error, usage=dict(result.usage), output=deepcopy(output))
+                                 final_text=result.final_text, error=error, usage=dict(result.usage), output=deepcopy(output),
+                                 protocol_messages=[{**asdict(m), "tool_calls": [asdict(c) for c in m.tool_calls]}
+                                                    for m in result.messages[len(messages)-1:]] if status == "completed" else [])
         except BudgetExceeded as exc:
             with self._condition:
                 if record.status not in TERMINAL_STATUSES:
@@ -276,6 +294,27 @@ class AgentLoop:
         # Cancellation ends public state, but cannot preempt a blocking provider call.
         self._active.pop(record.run_id, None)
         self._condition.notify_all()
+
+    def _progress(self, record: RunRecord, kind: str, payload: dict) -> None:
+        # Token events are volatile; terminal snapshots persist text and safe tool state.
+        with self._condition:
+            if record.status in TERMINAL_STATUSES:
+                return
+            if kind == "message.delta":
+                record.partial_text = (record.partial_text + payload["text"])[-65536:]
+            elif kind.startswith("tool."):
+                record.tool_activity[payload["call_id"]] = {**record.tool_activity.get(payload["call_id"], {}),
+                    **payload, "status": payload.get("status", "running")}
+            events = self._events_by_run[record.run_id]
+            event = RunEvent(record.run_id, self._cursor(record.run_id) + 1, kind, deepcopy(payload))
+            if len(events) >= 512:
+                del events[0]
+            events.append(event)
+            self._condition.notify_all()
+
+    def _cursor(self, run_id: str) -> int:
+        events = self._events_by_run[run_id]
+        return events[-1].seq if events else 0
 
     def get_run(self, run_id: str) -> RunRecord:
         with self._condition:
@@ -306,13 +345,13 @@ class AgentLoop:
     def snapshot(self, run_id: str) -> tuple[RunRecord, int]:
         """Capture state and event cursor atomically for a new SSE subscriber."""
         with self._condition:
-            return _copy_record(self._record(run_id)), len(self._events_by_run[run_id])
+            return _copy_record(self._record(run_id)), self._cursor(run_id)
 
     def wait_events(self, run_id: str, after_seq: int, timeout: float) -> tuple[RunEvent, ...]:
         with self._condition:
             self._record(run_id)
             self._condition.wait_for(
-                lambda: len(self._events_by_run[run_id]) > after_seq
+                lambda: self._cursor(run_id) > after_seq
                 or self._records_by_id[run_id].status in TERMINAL_STATUSES,
                 timeout=timeout,
             )
@@ -354,7 +393,7 @@ class AgentLoop:
     def _emit(self, record: RunRecord, event_type: str, payload: dict[str, Any], **changes) -> None:
         events = self._events_by_run[record.run_id]
         candidate = replace(record, updated_at=datetime.now(UTC), **changes)
-        event = RunEvent(run_id=record.run_id, seq=len(events) + 1, type=event_type, payload=payload)
+        event = RunEvent(run_id=record.run_id, seq=self._cursor(record.run_id) + 1, type=event_type, payload=payload)
         if self._repository is not None:
             try:
                 self._repository.save(candidate, (*events, event))
@@ -366,7 +405,7 @@ class AgentLoop:
                 record.error = "run state could not be persisted; restart after repairing storage"
                 record.summary = "storage unavailable"
                 record.updated_at = datetime.now(UTC)
-                events.append(RunEvent(record.run_id, len(events) + 1, "run.interrupted",
+                events.append(RunEvent(record.run_id, self._cursor(record.run_id) + 1, "run.interrupted",
                                        {"status": record.status, "error": record.error}))
                 self._condition.notify_all()
                 raise RunAdmissionError("storage_unavailable", record.error) from exc
@@ -376,7 +415,7 @@ class AgentLoop:
 
 
 def _copy_record(record: RunRecord) -> RunRecord:
-    return replace(record, usage=dict(record.usage), output=deepcopy(record.output))
+    return deepcopy(record)
 
 
 def _is_budget_failure(status: str, errors: tuple[str, ...]) -> bool:

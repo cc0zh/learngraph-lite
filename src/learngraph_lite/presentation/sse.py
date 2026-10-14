@@ -22,6 +22,10 @@ def public_run(record: RunRecord) -> dict[str, Any]:
         "summary": record.summary,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
+        "user_text": record.user_text,
+        "mode": record.mode,
+        "partial_text": record.partial_text,
+        "tool_activity": deepcopy(record.tool_activity),
     }
     if record.goal_id is not None:
         payload["goal_id"] = record.goal_id

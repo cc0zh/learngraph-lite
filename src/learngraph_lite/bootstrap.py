@@ -23,6 +23,26 @@ from learngraph_lite.application.planning import PlanningRepository, PlanningSer
 from learngraph_lite.application.planning_generation import GeneratePlanning
 
 
+def _load_dotenv() -> None:
+    """Load simple KEY=VALUE settings without overriding the process environment."""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.is_file():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        name, separator, value = line.partition("=")
+        if not separator or not name.strip():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(name.strip(), value)
+
+
 @dataclass
 class FixtureModel:
     """Deterministic fixture model; UI/export must label this as fixture mode."""
@@ -139,6 +159,7 @@ def create_fixture_app():
 def build_real_gateway():
     from learngraph_lite.infrastructure.openai_gateway import OpenAIChatGateway
 
+    _load_dotenv()
     api_key = os.environ.get("MODEL_API_KEY") or os.environ.get("OPENAI_API_KEY")
     model = os.environ.get("MODEL_NAME")
     if not api_key or not model:
@@ -154,12 +175,22 @@ def build_real_gateway():
 
 def create_real_app(*, database: str | Path | None = None):
     """Explicit real-model factory; missing configuration fails at startup."""
+    return _create_business_app(build_real_gateway(), "real", database)
+
+
+def create_business_fixture_app(*, database: str | Path | None = None):
+    from learngraph_lite.infrastructure.business_fixture import BusinessFixtureModel
+
+    return _create_business_app(BusinessFixtureModel(), "fixture",
+        database or os.environ.get("LEARNGRAPH_DATABASE_PATH", ".local/fixture.sqlite3"))
+
+
+def _create_business_app(gateway, mode: str, database):
     from learngraph_lite.presentation.http import create_app
     from learngraph_lite.infrastructure import SQLiteDocumentRepository, SQLiteLearningRepository, SQLiteLessonRepository, SQLitePlanningRepository
     from learngraph_lite.infrastructure.document_parser import SubprocessDocumentParser
     from learngraph_lite.infrastructure.run_persistence import SQLiteRunRepository
 
-    gateway = build_real_gateway()
     imports = None
     try:
         database_path = Path(database or os.environ.get("LEARNGRAPH_DATABASE_PATH", ".local/learngraph.sqlite3"))
@@ -168,15 +199,20 @@ def create_real_app(*, database: str | Path | None = None):
         learning = SQLiteLearningRepository(database_path)
         documents = SQLiteDocumentRepository(database_path)
         lessons = SQLiteLessonRepository(database_path)
+        learning_service = LearningService(learning)
+        for item in PlanningService(planning).list_goals():
+            state = planning.get(item["goal_id"])
+            if state.graph is not None and state.graph.status.value == "published":
+                learning_service.ensure_goal(state.graph)
         context = LearningContext(planning, learning, documents, lessons)
         loop = build_learning_loop(gateway, planning, learning, documents, lessons, SQLiteRunRepository(database_path))
         imports = DocumentImports(documents, SubprocessDocumentParser(), PlanningService(planning))
-        return create_app(loop, model_mode="real", model_configured=True, on_close=gateway.close,
+        return create_app(loop, model_mode=mode, model_configured=mode == "real", on_close=gateway.close,
                           learning_context=context,
                           exercises=GenerateExercise(learning, context.context, documents),
                           lessons=GenerateLesson(lessons, learning, context.context, documents),
                           lesson_events=LessonService(lessons, LearningService(learning), loop, context.context),
-                          planning=PlanningService(planning), on_publish=LearningService(learning).start_goal,
+                          planning=PlanningService(planning), on_publish=learning_service.ensure_goal,
                           document_imports=imports)
     except Exception:
         if imports is not None:

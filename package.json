@@ -1,13 +1,20 @@
 {
   "name": "mini-learngraph4",
   "private": true,
+  "workspaces": ["frontend"],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "bin": {
     "code-harness-init": "./scripts/create-project.cjs"
   },
   "scripts": {
+    "dev": "node scripts/dev.cjs",
+    "dev:web": "npm run dev --workspace frontend",
+    "dev:api:business": "uv run --locked uvicorn learngraph_lite.bootstrap:create_business_fixture_app --factory --app-dir src --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 2",
+    "check:web": "npm run build --workspace frontend",
+    "check": "npm run ci && npm run check:web",
+    "test:e2e": "npm run test:e2e --workspace frontend",
     "ci": "node scripts/ci.cjs",
     "test": "node --test tests/tooling.test.cjs && uv run --locked python scripts/run-python-tests.py",
     "check:docs": "node scripts/check-docs.cjs",
@@ -20,6 +27,7 @@
     "check:py-boundaries": "uv run --locked python scripts/check-python-boundaries.py",
     "smoke:fixture": "uv run --locked python scripts/run-fixture-smoke.py",
     "smoke:real": "uv run --locked python scripts/run-model-smoke.py",
+    "smoke:p0:real": "uv run --locked python -X utf8 scripts/run-real-p0-smoke.py",
     "eval:offline": "uv run --locked python evals/run.py",
     "demo:fixture": "uv run --locked python scripts/run-fixture-demo.py",
     "demo:learning-agent": "uv run --locked python -X utf8 scripts/run-learning-agent-demo.py"

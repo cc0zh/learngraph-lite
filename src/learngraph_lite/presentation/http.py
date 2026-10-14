@@ -247,6 +247,10 @@ class LocatedSource(BaseModel):
 
 
 class PublicRun(BaseModel):
+    user_text: str = ""
+    mode: str = "runner"
+    partial_text: str = ""
+    tool_activity: dict[str, dict] = Field(default_factory=dict)
     run_id: str
     session_id: str
     root_task_id: str
@@ -612,6 +616,7 @@ def create_app(
             session_id=session_id, user_text=body.user_text, idempotency_key=body.request_id,
             goal_id=body.goal_id, node_id=body.node_id,
             mode=body.mode, retry_of_run_id=body.retry_of_run_id,
+            stream=True,
         ))
         return public_run(record)
 
@@ -650,6 +655,12 @@ def create_app(
                 return
             while not await request.is_disconnected():
                 events = await asyncio.to_thread(loop.wait_events, run_id, cursor, heartbeat_seconds)
+                if events and events[0].seq > cursor + 1:
+                    latest, cursor = loop.snapshot(run_id)
+                    yield encode_snapshot(latest, cursor)
+                    if latest.status in TERMINAL_STATUSES:
+                        return
+                    continue
                 for event in events:
                     yield encode_sse(event)
                     cursor = event.seq

@@ -1,5 +1,41 @@
 # LearnGraph Lite 从零实现计划
 
+## P0 基线固化与真实模型验证（进行中）
+
+- 用户授权：修复测试配置隔离、固化当前 React P0 本地 Git 基线，并使用已有配置验证真实模型 P0；允许有界真实 API 调用，不推送、部署或公开本地配置/资料。
+- 范围：沿用已有 React P0 和同一 history；不扩展 P1。真实验证使用独立测试数据库与非敏感学习目标，fixture 与真实证据分别记录。
+- [x] 配置隔离：缺配置测试 mock `_load_dotenv`，不读开发者 `.env`；新增临时目录配置/进程变量优先级与无配置回归，gateway 构造使用 mock，不访问供应商。
+- [x] 离线基线：最终 `npm.cmd run ci` 通过 119 Python、19 Node、import/文档/仓库/Action 检查；`check:web`、11 个 P0 E2E、20/20 离线 fixture 评估与 `git diff --check` 通过。提交仅包含 P0 源码/测试/锁文件/文档，排除凭据、数据库和生成制品。
+- [ ] 真实验证：普通回答/原生工具 smoke，再验证目标确认、模型生成图谱、人工发布、教学工具实际出题、作答/推荐、按钮出题与 SQLite 恢复；限制节点/题量和调用预算，失败如实记录，不自动无限重试。
+- [x] P0 审查收敛：SafeMarkdown 禁用 img，测试拦截所有外站；未确认 POST 独立保存完整输入与原 request_id，先 GET 再显式重发，不猜测历史任务。旧列表快照失效保护、规划按 goal/graph 独立保留 dirty、超长节点使用持久 UUID session（兼容有效旧 session）。明确 4xx 拒绝解锁并恢复输入，只有 transport/5xx 不确定结果留 pending；失败 run 的 retry 才创建新 request_id。新增9个浏览器回归，总计11通过，不扩展 P1。
+- [ ] 收口：同步 README、架构、阶段指南、质量评分、技术债、history/学习笔记，提交本地 P0 基线；真实验证失败不伪装成通过，记录具体阻塞。
+- 失败与修复：本轮前次检查为 116 collected/1 failed，`patch.dict(os.environ, clear=True)` 未隔离根 `.env`；临时 mock loader 后定向通过，本轮正式修复并增加独立回归后 117 项通过。既有 TestClient 弃用提示与关闭测试的 graceful timeout/CancelledError 仍出现，CI exit 0，不据此承诺无日志告警。
+- 真实验收入口：新增 opt-in `smoke:p0:real`，复用生产 HTTP 装配与真实 gateway；独立新数据库/脱敏 JSON 报告，整条旅程最多12次模型调用，重开数据库禁止任何新模型调用。两项 driver 离线测试使用明确标记 fixture 验证入口本身，不算真实模型结果。该入口不进入默认 CI。
+- 浏览器失败收敛：首轮9项为7 passed/2 failed；响应丢失时 SSE snapshot 清掉 pending 的错误提示，改为有 pending 时保留错误。规划回归先保存目标会依法撤销确认，测试补显式重新确认后保存草稿，不绕过业务规则；再补422/409拒绝回归，最终11 passed。最后 build、119 Python/19 Node CI 和 diff 检查通过。
+
+## React P0 实现与上轮验收（2026-10-13）
+
+- 用户授权：继续推进 React P0，覆盖首页、目标澄清确认、可编辑图谱与显式发布、节点对话、文本流/工具状态/停止、练习反馈与规则进度推荐、SQLite 刷新恢复。
+- 实现：React 19/TypeScript/Vite（7.3.7）工作区、React Flow、禁 raw HTML 的 Markdown、键盘节点列表与窄屏工作台；后端沿用 AgentLoop/业务用例，加入有界输入、协议历史、SSE cursor 恢复与 SQLite 业务 fixture。私有结构化生成不进入文本流。
+- 上轮验证（历史证据）：116 个 Python、19 个 Node 测试，web 类型检查/build、1 个 Playwright P0 E2E（375/768/1024/1440 响应式）、20/20 fixture 评估及 fixture/demo 已通过。浏览器主流程覆盖目标→图谱→节点流→按钮练习/反馈→刷新→停止/重试；不据此宣称对话工具出题和模型失败重试覆盖充分。
+- 边界：fixture 证明确定性 UI/API 协议，不证明真实模型质量、供应商兼容或引用语义。真实供应商 smoke 未执行；P1 资料原文页、学习包固定组件前端、提案 HTTP/前端与 M5 最终交接未完成。
+
+## React P0 进展检查修复（2026-10-13，本轮）
+
+- 诉求：修正进度文档损坏和完成状态夸大，补齐教学对话真正执行出题工具与模型失败/显式重试的验收缺口；沿用本计划与同一 React history，不另开任务记录，不提交 Git。
+- 代码修复范围（主 agent 实施）：React 节点聊天提交 mode: teaching，并显示/恢复 teaching 会话；业务 fixture 按原生工具协议实际调用 create_exercise，工具与按钮复用 GenerateExercise；浏览器补对话出题、模型失败/重试与刷新恢复覆盖。完成状态和验证须在下列条目补录，不把预期当成已通过。
+- 文档修复：README 补业务 UI fixture/付费 real 入口及独立 echo fixture 区别；修复计划/history/学习笔记中的字面量 Unicode/换行损坏，核对真实问号占位；更新架构、测试指南与技术债的预算/历史/P1/供应商边界。
+- 已具备预算：六次共享模型调用、八步、十二次工具调用、每次调用 12,000 估算输入 token 上限（消息和工具 schema 按 UTF-8 bytes/3）及 120 秒协作 deadline。按最旧完整用户回合裁剪历史；必要上下文超限则拒绝调用。usage 汇总不等于实际累计 token 硬预算，deadline 不会硬中断阻塞调用，独立 tool timeout 与完整累计输入/输出 token 预算仍不具备。
+- 已具备历史：同 session、同 mode 的 completed 回合从最近八条运行记录中恢复完整 user/assistant/tool 协议，保留 tool_calls/tool_call_id 配对；失败/取消/未完成回合不进入下一轮历史。业务 SQLite 重启后可恢复记录与已完成协议历史，但不会自动继续模型执行。
+- [x] 本轮实现确认：聊天 mode: teaching，兼容显示 runner/teaching；mastery 映射 unknown/proficient。业务 fixture 实际 context → create_exercise（内嵌生成）→ 最终回答，既有 Python fixture 测试扩展教学/按钮/答案隔离与恢复，总数仍为 116。
+- [x] 本轮专项验证：`npm run test:py` 为 116 passed；`npm run test:e2e` 修复后 2 passed。首轮先改测试，2 failed 复现工具未调用与 teaching 结果被过滤，修复后通过。主 E2E 实际工具出题/作答恢复，另验证按钮生成第二题、停止重试和四屏宽；第二 E2E 为真实业务 fixture 设置 + mock 模型失败/完成 run DTO，只证明 UI 失败可见、retry 保留 mode/input、新 request/原 retry ID，不宣称真实模型证据。
+- [x] 本轮其余代码验证：`npm.cmd run check:web`、`npm.cmd run eval:offline` 与 `npm.cmd run check:py-boundaries` 均通过；Node 测试已在全套 CI 中复验。
+- [x] 本轮文档验证：文档检查、相对引用核对与 `git diff --check` 通过；新增记录已改为正常 UTF-8 中文，不再包含字面量 Unicode/换行转义。
+- [ ] 真实供应商验证：未执行；需配置后单独记录 smoke/业务手测，fixture/MockTransport 不替代该证据。
+- 记录索引：[React history](../../histories/2026-10/20261013-2115-react-p0.md)、[阶段测试指南](../../demo/stage-review-real-testing.md)、[验收学习速记](../../learnings/2026-10/20261013-react-p0-acceptance.md)。
+
+> 历史边界：本计划保留各切片当时的实现、通过结果和未完成项；这些阶段事实不代表当前状态。当前进展与本轮待验证事项以文首 React P0 进展检查修复节为准，旧阶段通过不能替代本轮回归。
+
 ## 运行恢复与事件解释切片（已完成）
 
 - 用户已要求继续推进，撤销上轮暂停。本轮完成 run/session 作用域、请求输入、root 与公共结果的 SQLite 持久化，以及事件解释 HTTP；不进入 React 或真实供应商评估。
@@ -94,7 +130,9 @@
 - 2026-10-13：SQLite lesson persistence 最小切片完成 `SQLiteLessonRepository`，持久化 lesson package、事件 ACK、解释 run 和失败重试状态，验证重新实例化 repository 后可恢复事件幂等和解释重试；React 固定组件渲染器、HTTP ACK 路由、浏览器 E2E 和完整业务 schema 仍待后续接入。
 - 2026-10-13：HTTP/SSE 最小切片完成 FastAPI app factory、明确 fixture 启动入口、后台 run 准入和相同输入去重、取消后的名额保持、原子快照/事件 cursor 与实时心跳、本机 Host/同源写请求边界；本地入口设置有限 Uvicorn 连接关闭等待，再由 lifespan 协作取消并等待工作线程退出。引入锁定的 FastAPI/Uvicorn 与开发 HTTPX，CI/发布校验显式安装 uv 与 Python 依赖。实现仍未连接学习业务 repository。
 
-## 验收与交接
+## 历史验收与交接
+
+以下命令/数量保留各早期阶段事实；当前验收看文首 React 节，本轮检查不重写历史通过记录。
 
 - 已执行的命令及结果：
   - python scripts/check-python-boundaries.py：通过，输出 Python import boundaries passed。
@@ -134,15 +172,13 @@
   - npm.cmd run eval:offline：HTTP/SSE 切片回归通过，20/20 offline fixture eval cases passed。
   - npm.cmd run smoke:fixture：通过；独立 Uvicorn 进程与真实 TCP 手工 smoke 也通过 model/status、202 提交和 SSE 完成。
   - npm.cmd run check:docs / npm.cmd run check:actions / git diff --check：文档骨架、Action 固定 SHA 和空白检查通过。
-- 未执行的检查、阻塞和遗留事项：
-  - 真实模型 smoke 未执行，当前没有配置供应商 Key。
-  - nanobot GitHub tree API 本轮受 rate limit，未取得完整目录树；已核验 README、架构文档、核心 Loop/Runner 文件与 LICENSE。
-  - React/P1 与完整业务 HTTP 尚未实现；SQLite 目前只覆盖 planning state、document retrieval、learning state 与 lesson state 的最小 repository，不代表完整业务持久化。
-  - HTTP run/事件/请求去重与 session 作用域仅在进程内存中，未实现重启恢复或 token streaming；real factory 已接 planning/learning 只读用例及绑定资料检索/引用定位，完整业务 HTTP 仍待后续。同步模型/工具适配器需配置有限调用超时，否则关闭仍可能等待执行线程。
-  - assistant tool_calls/tool 消息配对和 Pydantic 工具参数校验已完成；真实供应商兼容性仍待 smoke 验证，见 tech-debt-tracker.md；Starlette TestClient 的 httpx 弃用提示也已记录。
-  - M4A 已接通 UTF-8 TXT/Markdown/文本型 PDF 二进制上传、解析、中文 BM25 检索和资料型图谱/练习/学习包 grounding；完整版本历史、语义支持评估和 React 原文页未实现。
-  - M4B 当前已完成固定组件生成、版本/来源表、HTTP ACK和SQLite持久化；解释任务原子关联及解释HTTP、React固定组件渲染器和浏览器E2E未实现。
-  - fixture demo 不是浏览器录屏或真实模型演示；M5 仍需真实模型 smoke 与最终演示交接材料。
+- 当前未执行的检查、阻塞和遗留事项（替代旧阶段过时汇总，不改变其验收事实）：
+  - 本轮教学对话工具出题与失败/显式重试修复的代码回归待执行，结果补在文首待验证条目。
+  - 真实供应商 smoke/demo 与引用语义/生成质量验证未执行。
+  - P1 资料原文页、学习包固定组件前端、提案 HTTP/前端和 M5 最终交接未完成。规划/学习/资料/学习包/运行与解释 HTTP 已接通 SQLite，不能再写成仅内存或未实现 React。
+  - 已具备估算输入上限、协作 deadline、已完成协议历史与 SSE cursor 有界恢复；无阻塞调用硬中断、独立 tool timeout 或完整累计 token 硬预算。
+  - 图谱发布/学习初始化、资料校验/业务提交仍无跨仓库事务；完整版本历史/schema 迁移及成绩迁移协议未完成。
+  - nanobot tree API 完整目录树未取得；SDK MockTransport 不证明供应商兼容，TestClient 弃用提示与 shutdown 预期日志见既有历史结果。
 - 必要的复验方式：
   - uv sync --locked --group dev
   - uv run --locked python scripts/run-python-tests.py

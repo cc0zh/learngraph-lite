@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from learngraph_lite.agent_core import AgentRunner, TextMessage
 from learngraph_lite.application.agent import AgentLoop, RunRequest
-from learngraph_lite.bootstrap import build_echo_tools, create_real_app
+from learngraph_lite.bootstrap import build_echo_tools, build_real_gateway, create_real_app
 from learngraph_lite.infrastructure.openai_gateway import OpenAIChatGateway
 
 
@@ -104,7 +105,8 @@ def test_sdk_failures_are_bounded_sanitized_and_not_successful_answers():
 
 
 def test_real_factory_requires_configuration_and_closes_sdk_after_workers():
-    with patch.dict(os.environ, {}, clear=True):
+    # Empty process variables alone do not isolate a developer's root .env.
+    with patch.dict(os.environ, {}, clear=True), patch("learngraph_lite.bootstrap._load_dotenv"):
         try:
             create_real_app()
         except RuntimeError as exc:
@@ -127,3 +129,32 @@ def test_real_factory_requires_configuration_and_closes_sdk_after_workers():
             assert api.get("/api/model/status").json() == {"mode": "real", "configured": True}
             assert not client.is_closed
     assert client.is_closed
+
+
+def test_real_configuration_loads_only_isolated_dotenv_and_preserves_process_values():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        bootstrap_file = root / "src" / "learngraph_lite" / "bootstrap.py"
+        (root / ".env").write_text(
+            "# Test-only values; never read the repository configuration.\n"
+            "export MODEL_API_KEY='fixture-only-key'\nMODEL_NAME=dotenv-model\n"
+            'MODEL_BASE_URL="https://mock.test/v1"\nMODEL_TIMEOUT_SECONDS=7\n'
+            "MODEL_MAX_OUTPUT_TOKENS=128\n", encoding="utf-8")
+        with patch("learngraph_lite.bootstrap.__file__", str(bootstrap_file)), \
+                patch.dict(os.environ, {"MODEL_NAME": "process-model"}, clear=True), \
+                patch("learngraph_lite.infrastructure.openai_gateway.OpenAIChatGateway") as gateway:
+            assert build_real_gateway() is gateway.return_value
+            gateway.assert_called_once_with(api_key="fixture-only-key", model="process-model",
+                base_url="https://mock.test/v1", timeout=7.0, max_output_tokens=128)
+
+        (root / ".env").unlink()
+        with patch("learngraph_lite.bootstrap.__file__", str(bootstrap_file)), \
+                patch.dict(os.environ, {}, clear=True), \
+                patch("learngraph_lite.infrastructure.openai_gateway.OpenAIChatGateway") as gateway:
+            try:
+                build_real_gateway()
+            except RuntimeError as exc:
+                assert "MODEL_API_KEY" in str(exc) and "MODEL_NAME" in str(exc)
+            else:
+                raise AssertionError("missing isolated configuration was accepted")
+            gateway.assert_not_called()

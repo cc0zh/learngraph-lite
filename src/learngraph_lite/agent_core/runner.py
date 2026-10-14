@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from time import monotonic
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,7 +29,7 @@ class AgentRunner:
         self._model = model
         self._tools = tools
 
-    def run(self, messages: tuple[TextMessage, ...], budget: Budget | None = None) -> RunnerResult:
+    def run(self, messages: tuple[TextMessage, ...], budget: Budget | None = None, on_progress=None) -> RunnerResult:
         budget = budget or (self._model.budget if isinstance(self._model, BudgetedModelGateway) else Budget())
         model = budgeted(self._model, budget)
         transcript = list(messages)
@@ -38,7 +39,11 @@ class AgentRunner:
         try:
             for step in range(budget.max_steps):
                 budget.check_step(step)
-                response = model.complete(tuple(transcript), self._tools.model_tools())
+                if on_progress is None:
+                    response = model.complete(tuple(transcript), self._tools.model_tools())
+                else:
+                    response = model.stream_complete(tuple(transcript), self._tools.model_tools(),
+                        lambda text: on_progress("message.delta", {"text": text}))
                 budget.check_step(step)
                 if response.content or response.tool_calls:
                     transcript.append(
@@ -60,11 +65,16 @@ class AgentRunner:
 
                 for call in response.tool_calls:
                     budget.take_tool_call()
+                    started = monotonic()
+                    if on_progress is not None:
+                        on_progress("tool.started", {"call_id": call.id, "name": call.name})
                     tool = self._tools.get(call.name)
                     if tool is None:
                         error = f"unknown tool: {call.name}"
                         errors.append(error)
                         transcript.append(TextMessage(role="tool", content=error, tool_call_id=call.id))
+                        if on_progress is not None:
+                            on_progress("tool.finished", {"call_id": call.id, "name": call.name, "status": "failed"})
                         continue
                     try:
                         args = json.loads(call.arguments)
@@ -72,11 +82,15 @@ class AgentRunner:
                         error = f"invalid JSON for tool {call.name}: {exc.msg}"
                         errors.append(error)
                         transcript.append(TextMessage(role="tool", content=error, tool_call_id=call.id))
+                        if on_progress is not None:
+                            on_progress("tool.finished", {"call_id": call.id, "name": call.name, "status": "failed"})
                         continue
                     if not isinstance(args, dict):
                         error = f"invalid arguments for tool {call.name}: expected a JSON object"
                         errors.append(error)
                         transcript.append(TextMessage(role="tool", content=error, tool_call_id=call.id))
+                        if on_progress is not None:
+                            on_progress("tool.finished", {"call_id": call.id, "name": call.name, "status": "failed"})
                         continue
                     try:
                         result = tool.execute(args)
@@ -90,6 +104,11 @@ class AgentRunner:
                             tool_call_id=call.id,
                         )
                     )
+                    budget.check_step(0)
+                    if on_progress is not None:
+                        on_progress("tool.finished", {"call_id": call.id, "name": call.name,
+                            "status": "failed" if isinstance(result, dict) and "error" in result else "completed",
+                            "elapsed_ms": round((monotonic() - started) * 1000)})
             raise BudgetExceeded("step budget exhausted")
         except BudgetExceeded as exc:
             errors.append(str(exc))

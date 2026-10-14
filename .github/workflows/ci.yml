@@ -37,6 +37,20 @@ jobs:
       - name: Run base CI checks
         run: npm run ci
 
+      - name: Install locked frontend dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build React frontend
+        run: npm run check:web
+
+      - name: Install browser for P0 E2E
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+
+      - name: Run fixture P0 browser E2E
+        if: runner.os == 'Linux'
+        run: npm run test:e2e
+
       - name: Package release artifact
         run: npm run release-package
 

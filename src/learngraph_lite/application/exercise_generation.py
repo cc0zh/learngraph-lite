@@ -169,7 +169,13 @@ class GenerateExercise:
         state = self._repository.get(goal_id)
         return {"exercises": [self._public(item) for item in state.exercises.values()
                               if item.node_id == node_id
-                              and item.graph_content_revision == context["content_revision"]]}
+                              and item.graph_content_revision == context["content_revision"]],
+                "feedback": {attempt.exercise_id: {
+                    "attempt": asdict(attempt),
+                    "correct_option_id": state.exercises[attempt.exercise_id].correct_option_id,
+                    "explanation": state.exercises[attempt.exercise_id].explanation,
+                } for attempt in state.attempts if attempt.node_id == node_id
+                    and state.exercises[attempt.exercise_id].graph_content_revision == context["content_revision"]}}
 
     def get_exercise(self, goal_id: str, exercise_id: str) -> dict:
         try:
