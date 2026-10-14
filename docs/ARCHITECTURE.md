@@ -1,6 +1,6 @@
 # 架构总览
 
-LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前已实现 React P0 主要闭环：Python 分层骨架、独立 Agent 内核、应用层 AgentLoop、planning/document/learning/lesson/run SQLite 持久化、FastAPI 业务 HTTP/SSE、OpenAI-compatible 适配器，以及 React 目标、图谱、节点学习、流式状态、练习反馈和刷新恢复页面。本轮修复测试配置隔离与 P0 请求/刷新/Markdown 边界；Python 119、Node 19、web build、E2E 11、离线评估 20/20 和边界/文档检查通过。真实供应商验证正在独立推进。P1 资料原文页、学习包组件前端和提案 HTTP/前端未完成。
+LearnGraph Lite 是本地单用户运行的学习 Agent Web 应用。当前已实现 React P0 主要闭环：Python 分层骨架、独立 Agent 内核、应用层 AgentLoop、planning/document/learning/lesson/run SQLite 持久化、FastAPI 业务 HTTP/SSE、OpenAI-compatible 适配器，以及 React 目标、图谱、节点学习、流式状态、练习反馈和刷新恢复页面。本轮修复测试配置隔离与 P0 请求/刷新/Markdown 边界；Python 119、Node 19、web build、E2E 11、离线评估 20/20 和边界/文档检查通过。2026-10-14 DeepSeek/deepseek-flash 协议 smoke、单次真实 P0 HTTP 与 React 结果恢复走查通过，不等于完整真实 E2E/质量评估。P1 资料原文页、学习包组件前端和提案 HTTP/前端未完成。
 
 正式规格以 docs/从零构建功能文档.md 为准。本文记录当前实现边界，避免把目录名误当作架构完成。
 
@@ -42,7 +42,7 @@ M1 fixture smoke 使用 python -m learngraph_lite.bootstrap：bootstrap 装配 f
 
 `OpenAIChatGateway` 位于 infrastructure，使用官方 SDK 将 Chat Completions 映射到内核协议。`TextMessage` 保存 assistant 的完整 `tool_calls`，Runner 先追加 assistant 消息，再按原始 `tool_call_id` 追加对应结果；多个调用和错误参数也按相同顺序配对。`Tool.from_model` 由 Pydantic 生成 schema，执行时禁止额外字段和隐式类型转换，校验错误作为 tool 消息供模型修正；原有 dict schema 工具仍可使用。
 
-真实入口从环境变量显式创建 gateway、SQLite planning/learning/document/lesson/run repository 和 AgentLoop，缺失模型配置时启动失败。数据库默认 `.local/learngraph.sqlite3`，可由 `LEARNGRAPH_DATABASE_PATH` 指定；启动不创建演示目标或重置成绩。无作用域请求使用 echo registry；节点请求进入 `LearningContext.prepare()`，装配独立 Runner，默认使用只读业务工具，显式 teaching 模式增加练习与学习包生成工具。SDK 关闭隐式重试、设置有限网络超时和 `max_tokens` 输出上限（默认 4096），超时/连接/HTTP 错误转换成不带供应商原始响应的失败信息；截断、空结果和不支持的调用拒绝视为成功。lifespan 先关闭 loop 并等待 worker 退出，再关闭 SDK 客户端。`scripts/run-model-smoke.py` 提供自选的普通回答与工具回合验证，当前供应商协议只有官方 SDK + MockTransport 的离线证据。
+真实入口从环境变量显式创建 gateway、SQLite planning/learning/document/lesson/run repository 和 AgentLoop，缺失模型配置时启动失败。数据库默认 `.local/learngraph.sqlite3`，可由 `LEARNGRAPH_DATABASE_PATH` 指定；启动不创建演示目标或重置成绩。无作用域请求使用 echo registry；节点请求进入 `LearningContext.prepare()`，装配独立 Runner，默认使用只读业务工具，显式 teaching 模式增加练习与学习包生成工具。SDK 关闭隐式重试、设置有限网络超时和 `max_tokens` 输出上限（默认 4096），超时/连接/HTTP 错误转换成不带供应商原始响应的失败信息；截断、空结果和不支持的调用拒绝视为成功。lifespan 先关闭 loop 并等待 worker 退出，再关闭 SDK 客户端。`scripts/run-model-smoke.py` 提供普通回答与工具回合验证，`scripts/run-real-p0-smoke.py` 使用生产 HTTP 装配、真实 gateway 和有界计数包装器验证独立 P0 数据；本轮真实配置证据见执行计划，不以 MockTransport 或一条旅程代替通用兼容性/质量结论。
 
 `LearningContext` 复用 planning repository 与 `LearningService`，要求已确认目标、已发布图谱、合法节点以及与学习状态完全一致的图谱快照。场景先按“版本化 system 指令 → JSON 业务数据 → 当前用户输入”装配；Loop 在当前输入之前插入同 session、同 mode 的 completed 回合协议历史，保留 user/assistant/tool 和 assistant tool_calls/tool_call_id 配对。最近八条运行记录是候选窗口，失败/取消/未完成与不同 mode 不纳入历史；输入超限时按完整用户回合裁剪，保留必要业务上下文和当前任务，不是无限长期记忆。上下文仅投影当前节点、直接前置依赖和计分后的表现，不包含练习私有答案。`get_learning_context` / `get_next_action` 闭包绑定本次目标/节点，Pydantic schema 不暴露作用域参数；推荐调用领域规则，模型不能写成绩或重定义推荐算法。每次调用检查当前发布状态与版本，过期工具错误回注模型；不自动重置或迁移成绩。
 
@@ -92,4 +92,4 @@ planning version 覆盖目标/问题/草稿的每次写入，graph revision/cont
 
 `lesson_run_tasks` 独立保存 `(goal_id,event_id,slot)`、root 和初始输入，不参与旧 lesson 表全量重写。SQLiteRunRepository 在同一短事务核对持久 ACK 的节点/包版本，提交逻辑关联与首次 run/request；重试核对原 root/input。Loop 在锁内按业务键复用最近 attempt，多个 request ID 不重复执行；跨 session/不同输入冲突，额外 request ID 不存别名，首次 request ID 仍指向首次 attempt。失败/取消/中断需显式 retry，新 slot 创建新任务。旧任务读取可复用完成结果，但不绕过新解释的当前版本校验。React 学习包固定组件与事件解释交互仍待 P1；节点对话/练习 P0 页面已实现，但真实解释质量尚未验收。
 
-图谱快照和每题分别持久来源表，发布保留图谱来源；人工修改/提案保留表、标 edited（无表为 general），不继承生成来源声明，同时校验引用 IDs 与正文标记。图谱 GET 从单份规划快照投影来源当前状态；图谱定位接口核对 planning version，旧版本返回409，当前没有图谱历史仓库。每题定位由 exercise_id 决定作用域，公共题目与幂等复用动态投影来源状态。未知引用404，解绑/删除/内容过期409；程序校验不证明原文语义支持。规划未保存失败可保留 root 显式 retry；没有持久 generation operation，提交后取消需先读取最新规划并重新审核版本。真实模型输出空间与生成质量仍待供应商验证。
+图谱快照和每题分别持久来源表，发布保留图谱来源；人工修改/提案保留表、标 edited（无表为 general），不继承生成来源声明，同时校验引用 IDs 与正文标记。图谱 GET 从单份规划快照投影来源当前状态；图谱定位接口核对 planning version，旧版本返回409，当前没有图谱历史仓库。每题定位由 exercise_id 决定作用域，公共题目与幂等复用动态投影来源状态。未知引用404，解绑/删除/内容过期409；程序校验不证明原文语义支持。规划未保存失败可保留 root 显式 retry；没有持久 generation operation，提交后取消需先读取最新规划并重新审核版本。三节点 general P0 样例已真实通过，更多节点/资料型输出空间与生成质量仍待评估。

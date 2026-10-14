@@ -2,7 +2,7 @@
 
 - Suite: offline-m5-fixture
 - Mode: fixture / deterministic local services
-- Real model smoke: not run; no provider API key is configured in this environment.
+- Real model smoke: not run by this offline suite; real evidence is recorded separately.
 - Result: 20/20 cases passed
 
 | Case | Area | Status | Evidence |

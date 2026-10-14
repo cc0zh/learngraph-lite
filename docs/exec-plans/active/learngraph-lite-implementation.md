@@ -1,17 +1,35 @@
 # LearnGraph Lite 从零实现计划
 
-## P0 基线固化与真实模型验证（进行中）
+## P0 基线固化与真实模型验证（已完成，2026-10-14）
 
 - 用户授权：修复测试配置隔离、固化当前 React P0 本地 Git 基线，并使用已有配置验证真实模型 P0；允许有界真实 API 调用，不推送、部署或公开本地配置/资料。
 - 范围：沿用已有 React P0 和同一 history；不扩展 P1。真实验证使用独立测试数据库与非敏感学习目标，fixture 与真实证据分别记录。
 - [x] 配置隔离：缺配置测试 mock `_load_dotenv`，不读开发者 `.env`；新增临时目录配置/进程变量优先级与无配置回归，gateway 构造使用 mock，不访问供应商。
 - [x] 离线基线：最终 `npm.cmd run ci` 通过 119 Python、19 Node、import/文档/仓库/Action 检查；`check:web`、11 个 P0 E2E、20/20 离线 fixture 评估与 `git diff --check` 通过。提交仅包含 P0 源码/测试/锁文件/文档，排除凭据、数据库和生成制品。
-- [ ] 真实验证：普通回答/原生工具 smoke，再验证目标确认、模型生成图谱、人工发布、教学工具实际出题、作答/推荐、按钮出题与 SQLite 恢复；限制节点/题量和调用预算，失败如实记录，不自动无限重试。
+- [x] 真实验证：`npm.cmd run smoke:real` 普通回答/原生 echo 工具回合通过；`npm.cmd run smoke:p0:real -- --database .local/p0-baseline-real.sqlite3 --report .local/p0-baseline-real.json` 通过。真实模型生成澄清/三节点图谱，显式确认、编辑发布，教学实际调用 get_learning_context/create_exercise，正式作答/规则推荐、按钮再出题、重复请求/交卷及 SQLite 重开通过，无自动重试。
 - [x] P0 审查收敛：SafeMarkdown 禁用 img，测试拦截所有外站；未确认 POST 独立保存完整输入与原 request_id，先 GET 再显式重发，不猜测历史任务。旧列表快照失效保护、规划按 goal/graph 独立保留 dirty、超长节点使用持久 UUID session（兼容有效旧 session）。明确 4xx 拒绝解锁并恢复输入，只有 transport/5xx 不确定结果留 pending；失败 run 的 retry 才创建新 request_id。新增9个浏览器回归，总计11通过，不扩展 P1。
-- [ ] 收口：同步 README、架构、阶段指南、质量评分、技术债、history/学习笔记，提交本地 P0 基线；真实验证失败不伪装成通过，记录具体阻塞。
+- [x] 收口：同步 README、架构、阶段指南、质量评分、技术债、history/学习笔记；先提交本地 P0 基线 `4c95770`（119 Python/19 Node/11 E2E 等通过且工作区干净），再执行真实调用。真实记录单独提交，不推送或部署，Key/数据库/生成报告均留在忽略目录。
 - 失败与修复：本轮前次检查为 116 collected/1 failed，`patch.dict(os.environ, clear=True)` 未隔离根 `.env`；临时 mock loader 后定向通过，本轮正式修复并增加独立回归后 117 项通过。既有 TestClient 弃用提示与关闭测试的 graceful timeout/CancelledError 仍出现，CI exit 0，不据此承诺无日志告警。
 - 真实验收入口：新增 opt-in `smoke:p0:real`，复用生产 HTTP 装配与真实 gateway；独立新数据库/脱敏 JSON 报告，整条旅程最多12次模型调用，重开数据库禁止任何新模型调用。两项 driver 离线测试使用明确标记 fixture 验证入口本身，不算真实模型结果。该入口不进入默认 CI。
 - 浏览器失败收敛：首轮9项为7 passed/2 failed；响应丢失时 SSE snapshot 清掉 pending 的错误提示，改为有 pending 时保留错误。规划回归先保存目标会依法撤销确认，测试补显式重新确认后保存草稿，不绕过业务规则；再补422/409拒绝回归，最终11 passed。最后 build、119 Python/19 Node CI 和 diff 检查通过。
+
+### 真实验收证据与边界
+
+- 日期：2026-10-14 UTC；供应商 host 为 `api.deepseek.com`，模型 `deepseek-flash`，Chat Completions/function calling/stream_options.include_usage；网络 timeout 60 秒、max_tokens 4096。仅证明这一配置本次可用，不推论所有兼容供应商/模型。
+- 供应商协议 smoke：普通短答与原生 echo 工具后回答通过；工具回合 usage 为 input 768/output 100/total 868，普通短答 usage 未在该命令汇总。它与下面 P0 usage 分开，不估算没有价格表支持的费用。
+- P0 HTTP suite：`real-p0-http`；独立目标“理解 Python 列表与元组的区别”，无资料绑定（general）。P0 脚本7次真实模型调用，恢复阶段0次；usage 为 input 9030/output 4080/total 13110。这是单次小样本连通/业务验收，不是20例真实评估或稳定性成功率。
+
+| 阶段 | run ID | 结果 | 阶段耗时（秒） |
+| --- | --- | --- | --- |
+| 澄清 | 58c3b667-6d36-4a30-87b8-d5340e730bdc | completed，仅提问不确认 | 2.678 |
+| 图谱 | f60f96ac-6f71-4ce6-80f6-1ca9aced8907 | completed，三节点 draft，随后显式编辑发布 | 8.348 |
+| 教学 | 430c95cc-c2b9-45e3-abfe-c1b1eba16f77 | completed，context/create_exercise 均成功，有 message.delta | 11.603 |
+| 按钮出题 | 26588b03-636b-4b85-ba87-e4193f32160c | completed，第二题独立保存 | 4.945 |
+
+- 原始脱敏证据：`.local/p0-baseline-real.json`；数据：`.local/p0-baseline-real.sqlite3`。均不提交。目标 ID 为 `d5a5fc2b-8976-4b61-93a2-7c8b03b155d5`，验证先选择公共第一个选项，不读取私有答案来“保证答对”；本次反馈正确，1个有效样本仍为学习中，不把一次正确说成掌握。
+- React 真实结果恢复走查：为该独立测试目标映射已完成教学 session，页面显示 Real、三节点、真实回答、两题、已保存反馈、1个样本和下一步理由；重开页面保持，恢复目标的网络请求为 GET。未重新发起模型任务；该走查不是从头到尾的真实浏览器自动化 E2E。11项自动化浏览器回归仍属于 fixture/mock。
+- 内容抽查：路线覆盖序列基础→可变性/引用→场景选择，两题围绕差异/应用场景，未发现明显错项或正式答案字段泄漏。最终教学回复偏重题卡，并展示 source_mode/citation_map/题目ID等技术用语，后续可改善讲解与表达；不把该抽查扩展为生成质量结论。
+- 未覆盖：P1 上传资料的真实引用语义、学习包/事件解释质量、提案链路、真实异常/取消/重试及20例模型评估。已有协作预算并非硬截止。最终更新文档及离线报告措辞：离线 suite 只声明自己未运行真实调用，不再擅自声称环境没有 Key；定向报告测试、离线评估、文档与 diff 检查通过，没有新增业务代码，不重复已通过的全套测试。测试用本地 API/Vite 已停止。
 
 ## React P0 实现与上轮验收（2026-10-13）
 
@@ -34,7 +52,7 @@
 - [ ] 真实供应商验证：未执行；需配置后单独记录 smoke/业务手测，fixture/MockTransport 不替代该证据。
 - 记录索引：[React history](../../histories/2026-10/20261013-2115-react-p0.md)、[阶段测试指南](../../demo/stage-review-real-testing.md)、[验收学习速记](../../learnings/2026-10/20261013-react-p0-acceptance.md)。
 
-> 历史边界：本计划保留各切片当时的实现、通过结果和未完成项；这些阶段事实不代表当前状态。当前进展与本轮待验证事项以文首 React P0 进展检查修复节为准，旧阶段通过不能替代本轮回归。
+> 历史边界：本计划保留各切片当时的实现、通过结果和未完成项；这些阶段事实不代表当前状态。当前进展与验收以文首“P0 基线固化与真实模型验证”节为准，旧阶段通过或未执行记录不替代本轮结果。
 
 ## 运行恢复与事件解释切片（已完成）
 

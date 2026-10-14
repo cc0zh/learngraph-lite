@@ -4,6 +4,8 @@
 
 本轮已隔离缺配置测试对项目 `.env` 的读取，新增临时配置与进程变量优先级回归，并修复未确认请求/刷新竞态、超长 session、规划未保存编辑和 Markdown 图片外连。当前离线基线复验为 119 Python、19 Node、web build、11 P0 E2E、20/20 fixture 和仓库检查通过；真实供应商与真实 P0 验证单独记录在[执行计划](../exec-plans/active/learngraph-lite-implementation.md)文首。
 
+2026-10-14 已通过 DeepSeek/deepseek-flash 的真实协议 smoke 和单次真实 P0 HTTP：P0 脚本7次模型调用、SQLite 重开0次；React 真实结果的恢复展示也已走查。原始脱敏报告留在 `.local/p0-baseline-real.json`，不提交。本次未完成真实浏览器从零全旅程、P1 资料/学习包质量与20例真实模型评估，不据此标记 M5 完成。
+
 React P0 主要流程已实现并有 fixture 验收。P0 的实现与验证证据集中维护在执行计划；本轮变更见[history](../histories/2026-10/20261013-2115-react-p0.md)。P1 资料原文页、学习包固定组件前端、提案 HTTP/前端与 M5 完整真实评估/最终交接未完成。
 
 ## 可测试的能力与边界
@@ -22,7 +24,7 @@ React P0 主要流程已实现并有 fixture 验收。P0 的实现与验证证�
 
 ## 先启动业务 UI（无需 Key）
 
-运行 `npm run dev`（Windows 可用 `npm.cmd run dev`），打开 <http://127.0.0.1:5173>。它同时启动 Vite 和 SQLite 业务 fixture API，页面必须标记 fixture；独立 `npm run dev:api` 仅演示 echo run 协议，不提供业务 UI 验收。配置好下面的真实模型变量后，可用 `npm run dev -- --real` 启动付费真实业务 UI；真实供应商尚未验证。
+运行 `npm run dev`（Windows 可用 `npm.cmd run dev`），打开 <http://127.0.0.1:5173>。它同时启动 Vite 和 SQLite 业务 fixture API，页面必须标记 fixture；独立 `npm run dev:api` 仅演示 echo run 协议，不提供业务 UI 验收。配置好下面的真实模型变量后，可用 `npm run dev -- --real` 启动付费真实业务 UI；当前配置不因历史 smoke 通过就自动保证连通。
 
 本轮浏览器补测重点：节点聊天 body 使用 mode: teaching，界面恢复 teaching 会话；要求出题后检查实际 create_exercise 工具活动和已保存题目，不接受仅口头答复；模型失败时明确显示 failed，并用新 request_id、原 retry_of_run_id/session/输入显式重试，刷新后仍能看到教学对话与题目/反馈。专项结果已记入计划；失败场景使用 mock 失败/完成 DTO，不等价于真实模型证据，其余验收仍待补录。
 

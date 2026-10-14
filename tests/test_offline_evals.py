@@ -39,4 +39,6 @@ def test_offline_m5_eval_report_marks_fixture_not_real_model():
     assert len(results) == 20
     assert "20/20 cases passed" in report
     assert "Real model smoke: not run" in report
+    assert "real evidence is recorded separately" in report
+    assert "no provider API key" not in report
     assert "must not be used as evidence of real model quality" in report

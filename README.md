@@ -2,7 +2,7 @@
 
 LearnGraph Lite 是一个本地单用户运行的学习 Agent 应用，目标是把学习目标变成可审核知识路线，并用轻量 Agent 循环支持资料学习、练习反馈和下一步建议。完整产品规格见 docs/从零构建功能文档.md。
 
-当前仓库已实现 React P0 主要闭环：Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、planning/document/learning/lesson/run 的 SQLite 持久化、FastAPI run 生命周期与 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清、图谱规划/编辑/发布、节点学习、练习反馈、掌握度推荐和业务 HTTP。React 前端覆盖首页、目标澄清确认、图谱编辑发布、节点对话、文本流/工具状态/停止/重试、练习反馈、进度推荐和 SQLite 刷新恢复；[测试指南](docs/demo/stage-review-real-testing.md) 记录 fixture 验收与真实供应商边界。本轮修复 `.env` 测试污染、未确认请求恢复、刷新竞态、超长 session 与 Markdown 图片外连；Python 119、Node 19、web build、E2E 11、离线评估 20/20、文档/仓库检查均通过。真实供应商验证正在独立推进；P1 资料原文页、学习包固定组件前端、提案 HTTP/前端和 M5 最终交接仍未完成。
+当前仓库已实现 React P0 主要闭环：Python 分层骨架、独立 AgentRunner、应用层 AgentLoop、planning/document/learning/lesson/run 的 SQLite 持久化、FastAPI run 生命周期与 SSE、OpenAI-compatible 原生工具调用适配器，以及目标澄清、图谱规划/编辑/发布、节点学习、练习反馈、掌握度推荐和业务 HTTP。React 前端覆盖首页、目标澄清确认、图谱编辑发布、节点对话、文本流/工具状态/停止/重试、练习反馈、进度推荐和 SQLite 刷新恢复；[测试指南](docs/demo/stage-review-real-testing.md) 记录 fixture 验收与真实供应商边界。本轮修复 `.env` 测试污染、未确认请求恢复、刷新竞态、超长 session 与 Markdown 图片外连；Python 119、Node 19、web build、E2E 11、离线评估 20/20、文档/仓库检查均通过。2026-10-14 的 DeepSeek/deepseek-flash 协议 smoke、单次真实 P0 HTTP 闭环及 React 真实结果恢复走查通过，详情见[执行计划](docs/exec-plans/active/learngraph-lite-implementation.md)文首；不代表完整真实浏览器 E2E、质量评估或 P1/M5 完成。
 
 ## 开发准备
 
@@ -38,7 +38,7 @@ npm run dev
 npm run dev -- --real
 ```
 
-这是可能产生费用的真实业务 UI，不是 fixture。缺少 Key 或模型名时后端启动失败；配置状态不证明供应商连通，真实供应商尚未验证。Vite 将 /api 代理到本机后端，浏览器仍按同源写请求访问。停止使用 Ctrl+C。
+这是可能产生费用的真实业务 UI，不是 fixture。缺少 Key 或模型名时后端启动失败；配置状态不证明供应商连通。本轮仅验证 DeepSeek/deepseek-flash 的一次协议/P0 HTTP 旅程与结果恢复，不保证你当前配置可用。Vite 将 /api 代理到本机后端，浏览器仍按同源写请求访问。停止使用 Ctrl+C。
 
 ## 启动独立 echo fixture API
 
@@ -85,13 +85,13 @@ MODEL_NAME=<支持 Chat Completions 和 function tool calling 的模型名>
 npm.cmd run dev:api:real
 ```
 
-macOS/Linux 对应设置 `export MODEL_API_KEY='...'` 和 `export MODEL_NAME='...'`，然后运行 `npm run dev:api:real`。`OPENAI_API_KEY` 可作为 Key 备用变量；`MODEL_BASE_URL` 未设置时使用 SDK 默认 OpenAI endpoint。`MODEL_TIMEOUT_SECONDS` 默认 30 秒，为 SDK 网络操作超时，并非整个 run 的硬截止时间；`MODEL_MAX_OUTPUT_TOKENS` 默认 4096，经 `max_tokens` 传递，给结构化图谱更多输出空间。该上限尚未经真实模型验证；更多节点或较长解释可能需要调整，截断会记录为失败。仅支持接受该参数的 Chat Completions 模型；不宣称所有兼容 endpoint 或模型均可用。
+macOS/Linux 对应设置 `export MODEL_API_KEY='...'` 和 `export MODEL_NAME='...'`，然后运行 `npm run dev:api:real`。`OPENAI_API_KEY` 可作为 Key 备用变量；`MODEL_BASE_URL` 未设置时使用 SDK 默认 OpenAI endpoint。`MODEL_TIMEOUT_SECONDS` 默认 30 秒，为 SDK 网络操作超时，并非整个 run 的硬截止时间；`MODEL_MAX_OUTPUT_TOKENS` 默认 4096，经 `max_tokens` 传递，给结构化图谱更多输出空间。本轮三节点真实 P0 样例在该上限通过；更多节点、资料型生成或较长解释仍需验证，截断会记录为失败。仅支持接受该参数的 Chat Completions 模型；不宣称所有兼容 endpoint 或模型均可用。
 
 real API 使用相同的提交/查询/SSE 路径，`/api/model/status` 返回 `mode: real`、`configured: true`，只表示配置已装配，不表示供应商连通或认证成功。不带目标/节点的请求使用普通回答与协议验证 `echo`；带作用域的请求装配节点上下文，注册 `get_learning_context`、`get_next_action`、`search_documents` 和 `read_document_chunk`。SDK 隐式重试关闭，应用关闭会先等待工作线程退出再关闭客户端；fixture API 仍只用于协议演示。
 
 real API 将请求输入、session 作用域、root task、结果/usage 与递增事件保存到同一 SQLite。`GET /api/sessions/{session_id}/runs` 可查询该会话的运行记录，旧 run ID 在重启后仍可查询并获取 SSE 快照。启动把遗留 queued/running 标为 interrupted，不自动重新调用模型；显式 retry 使用新 request_id 和原 retry_of_run_id，并保持原 session、作用域与输入。已完成任务不能 retry。节点对话按同 session、同 mode 恢复已完成回合的完整 user/assistant/tool 协议历史；仅取最近运行窗口并按输入预算裁剪，不自动续跑未完成任务。同数据库只支持一个 API 进程。
 
-配置完成后可手动运行 `npm.cmd run smoke:real`（macOS/Linux 使用 `npm run smoke:real`）。它会产生真实 API 请求和费用，依次验证普通回答、原生 echo 调用及工具结果后的回答；不进入默认 CI。本次尚未执行真实供应商 smoke，离线 SDK 协议测试不能替代这项证据。
+配置完成后可手动运行 `npm.cmd run smoke:real`（macOS/Linux 使用 `npm run smoke:real`）。它会产生真实 API 请求和费用，依次验证普通回答、原生 echo 调用及工具结果后的回答；不进入默认 CI。本轮已在 DeepSeek/deepseek-flash 执行并通过；离线 SDK 测试不能替代真实证据，该结果也不保证所有配置/供应商兼容。
 
 供应商协议通过后，可用 `npm.cmd run smoke:p0:real` 验证一条真实 P0 HTTP 旅程：澄清、确认、三节点图谱生成/人工编辑发布、教学工具出题、正式作答/掌握度/推荐、按钮出题、请求/交卷去重和 SQLite 重开。它实际调用模型，整条旅程最多12次请求；使用新建 `.local/real-p0-*.sqlite3`，不修改日常数据库，重开阶段禁止模型调用。脱敏 JSON 证据在 `.local/real-p0-*.json`，不保存 Key 或模型原文。可传 `-- --database .local/my-real-p0.sqlite3 --report .local/my-real-p0.json`，已有文件会拒绝覆盖。此入口不是浏览器 E2E，也不是生成质量/稳定性评估；两类证据分别记录。
 
