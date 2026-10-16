@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import type { PublicLesson } from '../src/lessons/types';
-import { expect, learningGoal, runDTO, test } from './fixtures';
+import { openLearning, learningContent, workbenchURL, expect, learningGoal, runDTO, test } from './fixtures';
 
 function lessonDTO(goal: string, id = 'lesson-current', version = 1): PublicLesson {
   return { id, goal_id: goal, node_id: 'n', graph_content_revision: 1, schema_version: 1, version,
@@ -18,7 +18,8 @@ type LessonDTO = ReturnType<typeof lessonDTO>;
 
 test('P1 lessons: delayed old list cannot replace a newer generated lesson or selection', async ({ page, request }) => {
   const goal = await learningGoal(request);
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await learningContent(page);
   const panel = page.locator('.lesson-panel');
   await panel.getByRole('button', { name: '生成学习包', exact: true }).click();
   await expect(panel.getByRole('article', { name: '学习包详情' })).toContainText('版本 1');
@@ -78,7 +79,8 @@ test('P1 lessons: fixture generates all four components from existing public que
   expect(publicQuestion).not.toHaveProperty('explanation');
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await learningContent(page);
   const panel = page.locator('.lesson-panel');
   await panel.getByText('选择已有题目加入学习包（最多 3 题）').click();
   await panel.getByRole('checkbox', { name: '加入题目 1' }).check();
@@ -116,9 +118,10 @@ test('P1 lessons: fixture generates all four components from existing public que
   expect(errors).toEqual([]);
 });
 
-test('P1 lessons: no fabricated quiz without existing exercises, and the three tabs fit narrow screens', async ({ page, request }) => {
+test('P1 lessons: no fabricated quiz without existing exercises, and both workbench tabs fit narrow screens', async ({ page, request }) => {
   const goal = await learningGoal(request);
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await learningContent(page);
   const panel = page.locator('.lesson-panel');
   await panel.getByRole('button', { name: '生成学习包', exact: true }).click();
   const detail = panel.getByRole('article', { name: '学习包详情' });
@@ -128,11 +131,12 @@ test('P1 lessons: no fabricated quiz without existing exercises, and the three t
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     if (width < 768) {
-      for (const name of ['节点对话', '练习与进度', '学习包']) {
+      for (const name of ['对话', '学习内容']) {
         await page.getByRole('tab', { name, exact: true }).click();
         await expect(page.getByRole('tab', { name, exact: true })).toHaveAttribute('aria-selected', 'true');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
       }
+      await page.getByRole('tab', { name: '学习内容', exact: true }).click();
       await expect(detail).toBeVisible();
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
@@ -158,7 +162,8 @@ test('P1 lessons: schema 0 and outdated packages are read-only; unsupported comp
   page.on('request', req => { if (req.method() === 'POST') writes.push(req.url()); });
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await learningContent(page);
   const panel = page.locator('.lesson-panel');
   const detail = panel.getByRole('article', { name: '学习包详情' });
   await expect(detail).toContainText('仍可读');
@@ -205,18 +210,19 @@ for (const failure of ['not-delivered', 'response-lost', 'mismatched-ack'] as co
       commands.push(route.request().postDataJSON());
       return route.fulfill({ status: 202, json: { ...runDTO('ack-recovered', '', 'completed', '已恢复解释'), mode: 'explanation' } });
     });
-    await page.goto(`/goals/${goal}/learn`);
+    await openLearning(page, request, goal);
+    await learningContent(page);
     const panel = page.locator('.lesson-panel');
     const chapter = panel.getByRole('article', { name: '学习包详情' }).locator('.lesson-block').first();
     await chapter.getByRole('button', { name: '让 Agent 解释', exact: true }).click();
     await expect(chapter.getByRole('alert')).toContainText('事件尚未确认');
     expect(commands).toEqual([]);
     expect(events).toHaveLength(1);
-    const key = `learngraph:lesson:${goal}:${lesson.id}:1:chapter:explanation:component`;
-    const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), key);
+    const key = `learngraph:lesson:${goal}:${lesson.id}:1:chapter:explanation:component:`;
+    const saved = await page.evaluate(prefix => JSON.parse(localStorage.getItem(Object.keys(localStorage).find(key => key.startsWith(prefix))!)!), key);
     await panel.getByRole('button', { name: '刷新学习包与状态' }).click();
     await page.reload();
-    await expect(chapter).toContainText('尚未确认');
+    await expect(chapter).toContainText('来源尚未保存');
     expect(events).toHaveLength(1);
     expect(commands).toEqual([]);
     await chapter.getByRole('button', { name: '恢复此解释', exact: true }).click();
@@ -257,7 +263,8 @@ for (const failure of ['not-delivered', 'response-lost'] as const) {
       if (commands.length === 1) await route.abort('failed');
       else await route.fulfill({ status: 202, json: run });
     });
-    await page.goto(`/goals/${goal}/learn`);
+    await openLearning(page, request, goal);
+    await learningContent(page);
     const panel = page.locator('.lesson-panel');
     const chapter = panel.getByRole('article', { name: '学习包详情' }).locator('.lesson-block').first();
     await chapter.getByRole('button', { name: '让 Agent 解释', exact: true }).click();
@@ -265,14 +272,15 @@ for (const failure of ['not-delivered', 'response-lost'] as const) {
     await expect(pending).toBeVisible();
     await expect(pending.getByRole('button', { name: '重发未确认请求' })).toBeEnabled();
     await page.reload();
-    await expect(pending).toContainText(String(commands[0].request_id));
+    await expect(pending).toContainText('请求尚未确认');
+    expect(await page.evaluate(() => Object.values(localStorage).some(value => value.includes('source_event_id')))).toBe(true);
     await panel.getByRole('button', { name: '刷新学习包与状态' }).click();
     await expect(pending.getByRole('button', { name: '重发未确认请求' })).toBeEnabled();
     expect(commands).toHaveLength(1);
     expect(events).toHaveLength(1);
     await pending.getByRole('button', { name: '重发未确认请求' }).click();
     await expect(pending).not.toBeVisible();
-    const history = panel.getByRole('region', { name: '学习包解释记录' });
+    const history = panel.getByRole('region', { name: '学习包章节' });
     await expect(history).toContainText('模拟解释失败');
     expect(commands[1]).toEqual(commands[0]);
     await history.getByRole('button', { name: '重试', exact: true }).click();
@@ -284,13 +292,14 @@ for (const failure of ['not-delivered', 'response-lost'] as const) {
     await expect.poll(() => commands.length).toBe(4);
     expect(commands[3]).toEqual(commands[2]);
     await chapter.getByRole('button', { name: '重新解释', exact: true }).click();
-    await expect(history.getByRole('article', { name: '组件解释' })).toHaveCount(3);
+    await expect(history.getByRole('article', { name: '组件解释' })).toHaveCount(1);
+    expect([...histories.values()].flat()).toHaveLength(3); // All old runs remain persisted; only current slot is inline.
     expect(commands[4].source_event_id).toBe(commands[0].source_event_id);
     expect(commands[4].explanation_slot).not.toBe(commands[0].explanation_slot);
     expect(commands[4].request_id).not.toBe(commands[0].request_id);
     expect(commands[4]).not.toHaveProperty('retry_of_run_id');
     expect(events).toHaveLength(1);
-    await expect(page.getByLabel('节点对话记录')).not.toContainText('解释已完成');
+    await expect(page.getByLabel('当前会话记录')).not.toContainText('解释已完成');
   });
 }
 
@@ -307,7 +316,8 @@ test('P1 lessons: a pending explanation uses its original package lock, not the 
     if (commands.length === 1) return route.abort('failed');
     return route.fulfill({ status: 202, json: { ...runDTO('original-package', '', 'completed', '原学习包已恢复'), mode: 'explanation' } });
   });
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await learningContent(page);
   const panel = page.locator('.lesson-panel');
   await panel.getByRole('article', { name: '学习包详情' }).locator('.lesson-block').first().getByRole('button', { name: '让 Agent 解释', exact: true }).click();
   const pending = panel.getByRole('region', { name: '未确认请求恢复' });
@@ -325,6 +335,7 @@ test('P1 lessons: a pending explanation uses its original package lock, not the 
   await panel.getByRole('button', { name: '刷新学习包与状态' }).click();
   await expect(pending.getByRole('button', { name: '重发未确认请求' })).toBeEnabled();
   await pending.getByRole('button', { name: '重发未确认请求' }).click();
+  await panel.getByRole('combobox', { name: '学习包版本' }).selectOption(current.id);
   await expect(panel.getByRole('article', { name: '组件解释' })).toContainText('原学习包已恢复');
   expect(commands[1]).toEqual(commands[0]);
 });
@@ -345,7 +356,8 @@ test('P1 lessons: historical quiz feedback is read from that exercise, never inf
   });
   const posts: string[] = [];
   page.on('request', req => { if (req.method() === 'POST') posts.push(req.url()); });
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await learningContent(page);
   const quiz = page.locator('.lesson-panel [data-component-kind="quiz_choice"]');
   await expect(quiz).toContainText('仅已有历史作答返回的解释');
   await expect(quiz).toContainText('回答正确');
@@ -371,7 +383,8 @@ test('P1 lessons: a failed step ACK and its explanation reuse the exact saved st
     commands.push(route.request().postDataJSON());
     return route.fulfill({ status: 202, json: { ...runDTO('step-explanation', '', 'completed', '解释已确认步骤'), mode: 'explanation' } });
   });
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await learningContent(page);
   const stepper = page.locator('.lesson-panel [data-component-kind="stepper"]');
   await stepper.getByRole('button', { name: '下一步', exact: true }).click();
   await expect(stepper).toContainText('步骤尚未保存');
@@ -379,15 +392,15 @@ test('P1 lessons: a failed step ACK and its explanation reuse the exact saved st
   expect(commands).toEqual([]);
   await stepper.getByRole('button', { name: '让 Agent 解释', exact: true }).click();
   await expect(stepper.locator('.lesson-explanation').getByRole('alert')).toContainText('事件尚未确认');
-  const key = `learngraph:lesson:${goal}:${lesson.id}:1:steps:explanation:${events[0].event_id}`;
-  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), key);
+  const key = `learngraph:lesson:${goal}:${lesson.id}:1:steps:explanation:${events[0].event_id}:`;
+  const saved = await page.evaluate(prefix => JSON.parse(localStorage.getItem(Object.keys(localStorage).find(key => key.startsWith(prefix))!)!), key);
   await page.reload();
   await expect(stepper).toContainText('第二步');
-  await expect(stepper).toContainText('尚未确认');
+  await expect(stepper).toContainText('来源尚未保存');
   expect(events).toHaveLength(2);
   expect(commands).toEqual([]);
   await stepper.getByRole('button', { name: '恢复此解释', exact: true }).click();
-  await expect(page.locator('.lesson-explanation-history')).toContainText('解释已确认步骤');
+  await expect(page.getByRole('article', { name: '组件解释' })).toContainText('解释已确认步骤');
   await expect(stepper).toContainText('步骤已保存');
   expect(events).toEqual([events[0], events[0], events[0]]);
   expect(events[0]).toMatchObject({ action: 'step_changed', payload: { step: 1 } });
@@ -417,7 +430,7 @@ test('P1 lessons: C1 stays artifact-local for lessons, quizzes, teaching and exp
       return route.fulfill({ status: 202, json: { ...runDTO('citation-explanation', '', 'completed', '解释正文 [C1] [C9]'), mode: 'explanation',
         output: { citation_map: { C1: explanationSource }, unverified_citation_ids: ['C9'] } } });
     }
-    return route.fulfill({ json: session === `learn:${goal}:n` ? [{ ...runDTO('citation-teaching', '引用测试', 'completed', '节点回答 [C1]'),
+    return route.fulfill({ json: session === goal ? [{ ...runDTO('citation-teaching', '引用测试', 'completed', '节点回答 [C1]'),
       output: { citation_map: { C1: teachingSource } } }] : [] });
   });
   await page.route(`**/api/goals/${goal}/lessons/${lesson.id}/events`, route => route.fulfill({ json: eventACK(lesson, route.request().postDataJSON()) }));
@@ -426,8 +439,9 @@ test('P1 lessons: C1 stays artifact-local for lessons, quizzes, teaching and exp
     lookups.push(new URL(route.request().url()).pathname);
     return route.fulfill({ status: 409, json: { error: { code: 'source_unavailable', message: '已解绑，不能定位原文' } } });
   });
-  await page.goto(`/goals/${goal}/learn`);
-  await expect(page.getByRole('region', { name: '节点资料绑定' })).toBeVisible();
+  await openLearning(page, request, goal);
+  await learningContent(page);
+  await expect(page.getByRole('button', { name: '当前节点资料', exact: true })).toBeVisible();
   const panel = page.locator('.lesson-panel');
   const detail = panel.getByRole('article', { name: '学习包详情' });
   const chapterCitations = detail.locator(':scope > .doc-citations');
@@ -437,18 +451,21 @@ test('P1 lessons: C1 stays artifact-local for lessons, quizzes, teaching and exp
   await expect(chapterCitations).not.toContainText('题目来源');
   await expect(quizCitations).toContainText('题目来源');
   await expect(quizCitations).not.toContainText('章节来源');
+  await page.getByRole('tab', { name: '对话', exact: true }).click();
   await expect(teachingCitations).toContainText('对话来源');
+  await learningContent(page);
   await detail.locator('.lesson-block').first().getByRole('button', { name: '让 Agent 解释', exact: true }).click();
-  expect(explanationSession).not.toBe(`learn:${goal}:n`);
+  expect(explanationSession).not.toBe(goal);
   const explanationCitations = panel.getByRole('article', { name: '组件解释' }).locator('.doc-citations');
   await expect(explanationCitations).toContainText('解释来源');
   await expect(explanationCitations).toContainText('未知引用 [C9]');
   await expect(explanationCitations.getByRole('button', { name: 'C9 · 查看原文' })).toHaveCount(0);
-  for (const citations of [chapterCitations, quizCitations, teachingCitations, explanationCitations]) {
+  for (const citations of [chapterCitations, quizCitations, explanationCitations, teachingCitations]) {
+    if (citations === teachingCitations) await page.getByRole('tab', { name: '对话', exact: true }).click();
     await citations.getByRole('button', { name: 'C1 · 查看原文', exact: true }).click();
     await expect(citations.getByRole('alert')).toContainText('409');
   }
   expect(lookups).toEqual([`/api/goals/${goal}/lessons/${lesson.id}/citations/C1`,
-    `/api/goals/${goal}/exercises/${exercise.id}/citations/C1`, '/api/runs/citation-teaching/citations/C1', '/api/runs/citation-explanation/citations/C1']);
-  await expect(page).toHaveURL(`/goals/${goal}/learn`);
+    `/api/goals/${goal}/exercises/${exercise.id}/citations/C1`, '/api/runs/citation-explanation/citations/C1', '/api/runs/citation-teaching/citations/C1']);
+  await expect(page).toHaveURL(workbenchURL(goal, goal));
 });

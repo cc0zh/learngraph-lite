@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { navigateWorkbench } from '../workbench/navigation';
 import { chunkLink, documentError, documentRequest } from './http';
 import { DocumentError } from './shared';
 import type { CitationMap, LocatedSource } from './types';
@@ -43,7 +44,7 @@ export function Citations({ citationMap, unverifiedIds = [], endpoint, goalId, n
       if (source.status !== 'valid' || !source.document_id || !source.chunk_id) {
         setErrors(current => ({ ...current, [id]: '409 · 来源已过期或不可用，不能定位原文。' })); return;
       }
-      window.location.assign(chunkLink(source.document_id, source.chunk_id, goalId, nodeId));
+      navigateWorkbench(chunkLink(source.document_id, source.chunk_id, goalId, nodeId));
     } catch (e) { if (!controller.signal.aborted) setErrors(current => ({ ...current, [id]: documentError(e) })); }
     finally { if (!controller.signal.aborted) setChecking(''); }
   }

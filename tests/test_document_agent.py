@@ -48,15 +48,19 @@ def call(name, args, call_id):
 
 
 class ScriptedModel:
-    def __init__(self, responses):
+    def __init__(self, responses, *, with_skills=False):
         self.responses = iter(responses)
         self.transcripts = []
         self.closed = False
+        self.with_skills = with_skills
 
     def complete(self, messages, tools):
-        assert {tool["function"]["name"] for tool in tools} == {
+        expected = {
             "get_learning_context", "get_next_action", "search_documents", "read_document_chunk",
         }
+        if self.with_skills:
+            expected.add("read_skill")
+        assert {tool["function"]["name"] for tool in tools} == expected
         self.transcripts.append(messages)
         return next(self.responses)
 
@@ -210,7 +214,7 @@ def test_http_sse_answer_sources_and_original_location_revalidate_saved_scope():
         model = ScriptedModel([
             ModelResponse(tool_calls=(call("search_documents", {"query": "alpha"}, "search"),)),
             ModelResponse(content="原文 [C1]；伪造 [C99]。"),
-        ])
+        ], with_skills=True)
         with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=model):
             app = create_real_app(database=database)
         with TestClient(app, base_url="http://localhost") as api:

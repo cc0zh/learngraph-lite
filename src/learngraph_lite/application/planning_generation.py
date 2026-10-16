@@ -133,35 +133,40 @@ class GeneratePlanning:
         saved = self._planning.save_clarification(goal_id, version, questions, lambda: model.budget.check_step(0))
         return {"planning": {"goal_id": goal_id, **asdict(saved)}}
 
-    def graph(self, goal_id: str, version: int, count: int, model: BudgetedModelGateway, feedback: str = "") -> dict:
+    def graph(self, goal_id: str, version: int, count: int | None, model: BudgetedModelGateway, feedback: str = "",
+              *, initial_guidance: str = "") -> dict:
         state = self.validate(goal_id, "graph", version, feedback)
-        if type(count) is not int or not 1 <= count <= 30:
+        if type(initial_guidance) is not str or len(initial_guidance) > 2000:
+            raise PlanningError("invalid_graph_guidance", "Initial graph guidance must be text of at most 2000 characters.")
+        if count is not None and (type(count) is not int or not 1 <= count <= 30):
             raise PlanningError("invalid_node_count", "Node count must be between 1 and 30.")
         sources = GenerationSources(self._documents, goal_id, None,
                                     state.goal.title + " " + state.goal.desired_outcome)
 
         def validate(candidate):
             graph = candidate.graph()
-            if len(graph.nodes) != count:
+            if count is not None and len(graph.nodes) != count:
                 raise ValueError("wrong node count")
             for node in candidate.nodes:
                 sources.validate(node.citation_ids, (node.title, node.explanation, node.learning_outcome))
             return graph
 
-        graph = _candidate(model, CandidateGraph, "生成小型学习依赖图。每节点含解释、学习结果、正整数预计分钟和优先级"
+        graph = _candidate(model, CandidateGraph, "生成小型知识地图，节点可以是主题、子主题或知识点，不是必须依次完成的项目任务。每节点含解释、学习结果、正整数预计分钟和优先级"
                            "（0最低、5最高）。只使用 prerequisite，source 是 target 的前置。不得生成环。"
-                           "explanation 要说明该节点对目标的必要性以及前置依赖和学习顺序；"
-                           "learning_outcome 要写可观察、可验证的具体学习成果，包含适合主题的实践或验证引导。"
+                           "explanation 要说明该知识主题的内容、联系及适用范围；仅在确有依赖时说明前置。独立主题可无连线，不要人为串成单链。"
+                           "learning_outcome 要写理解后可解释或辨析的内容，可包含适合主题的实践或验证引导，但不强制项目交付。"
                            "缺失成果时面向通用学习，不强制编程项目。时间预算为空时仅参考总投入 240 分钟，"
                            "不得补填用户字段或声称四周等日历周期。基础自述只用于暂定难度，须安排基础验证。"
+                           "initial_guidance 是首次建图的补充范围和内容要求，不表示已经存在图谱。"
                            "feedback 非空时依据 current_graph 和用户反馈调整难度、范围、基础铺垫或重点，"
                            "同时调整学习深度与练习/验证安排，让成果可检验。"
-                           "仍严格满足 node_count，只生成待审核的新草稿，不确认或自动发布。"
+                           "node_count 非空时严格满足；为空时根据目标和投入选择1至30个必要节点。"
+                           "只生成待审核的新草稿，不确认或自动发布。"
                            + sources.instruction,
                            {"goal": asdict(state.goal), "node_count": count, "sources": sources.sources,
                             "planning_reference_minutes": state.goal.time_budget_minutes or 240,
                             "current_graph": asdict(state.graph) if feedback.strip() else None,
-                            "feedback": feedback}, validate)
+                            "feedback": feedback, "initial_guidance": initial_guidance}, validate)
         # Recheck bindings too; planning version protects all goal and graph edits in the commit below.
         self.validate(goal_id, "graph", version, feedback)
         def before_save():

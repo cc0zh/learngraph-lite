@@ -41,3 +41,6 @@ def test_fixture_demo_document_marks_evidence_boundary():
     assert "deterministic fixture demo" in text
     assert "does not call a real model" in text
     assert "Real model smoke" in text
+    assert "not exercised by this in-memory demo" in text
+    assert "[current acceptance status](../QUALITY_SCORE.md)" in text
+    assert "still separate M5 work" not in text

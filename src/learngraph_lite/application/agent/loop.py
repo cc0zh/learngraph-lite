@@ -45,6 +45,8 @@ class RunRequest:
     stream: bool = False
     proposal_purpose: str = "改进学习路线"
     graph_feedback: str = ""
+    response_to_run_id: str | None = None
+    planning_answers_json: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,7 @@ class PreparedRun:
     runner: AgentRunner
     messages: tuple[TextMessage, ...]
     project_output: Callable[[str], dict[str, Any]] | None = None
+    prepare_history: Callable[[tuple[TextMessage, ...]], tuple[TextMessage, ...]] | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,7 @@ class RunRecord:
     partial_text: str = ""
     tool_activity: dict[str, dict] = field(default_factory=dict)
     protocol_messages: list[dict] = field(default_factory=list)
+    response_to_run_id: str | None = None
 
 
 class RunRepository(Protocol):
@@ -157,7 +161,7 @@ class AgentLoop:
     def _admit(self, request: RunRequest, budget: Budget) -> tuple[RunRecord, bool]:
         if self._closed:
             raise RunAdmissionError("shutting_down", "application is shutting down")
-        planning_task = request.mode in {"clarify", "graph", "proposal"}
+        planning_task = request.mode in {"planning", "clarify", "graph", "proposal"}
         if planning_task:
             if request.goal_id is None or request.node_id is not None or request.task_ref != f"goal:{request.goal_id}":
                 raise RunAdmissionError("invalid_scope", "planning tasks require a goal task_ref and no node")
@@ -174,6 +178,17 @@ class AgentLoop:
             if self._requests_by_key[key] != request:
                 raise RunAdmissionError("idempotency_conflict", "request ID was already used for different input")
             return existing, False
+        if request.mode == "planning" and request.session_id != f"planning:{request.goal_id}":
+            raise RunAdmissionError("invalid_scope", "planning uses the goal planning session")
+        if request.mode != "planning" and (request.response_to_run_id is not None or request.planning_answers_json):
+            raise RunAdmissionError("invalid_scope", "question card responses require planning mode")
+        if request.response_to_run_id is not None:
+            retry_root = self._records_by_id.get(request.retry_of_run_id) if request.retry_of_run_id else None
+            for prior_key, prior in self._requests_by_key.items():
+                if prior.response_to_run_id == request.response_to_run_id:
+                    record = self._records_by_key[prior_key]
+                    if retry_root is None or record.root_task_id != retry_root.root_task_id:
+                        raise RunAdmissionError("planning_response_used", "Question card was already answered; retry the original task explicitly.")
         if explaining and request.retry_of_run_id is None:
             root = self._explanation_roots.get((request.goal_id, request.source_event_id, request.explanation_slot))
             if root is not None:
@@ -209,7 +224,8 @@ class AgentLoop:
                 raise RunAdmissionError("invalid_retry", "this task already has a completed run")
         record = RunRecord(run_id=str(uuid4()), session_id=request.session_id, status="queued",
                            goal_id=request.goal_id, node_id=request.node_id, task_ref=request.task_ref,
-                           user_text=request.user_text if request.mode in {"runner", "teaching"} else "", mode=request.mode)
+                           user_text=request.user_text if request.mode in {"runner", "teaching", "planning"} else "", mode=request.mode,
+                           response_to_run_id=request.response_to_run_id)
         record.root_task_id = root_task_id or record.run_id
         if self._repository is not None:
             try:
@@ -264,6 +280,8 @@ class AgentLoop:
                         from learngraph_lite.agent_core.models import ToolCall
                         for item in previous.protocol_messages:
                             history.append(TextMessage(**{**item, "tool_calls": tuple(ToolCall(**c) for c in item.get("tool_calls", ())) }))
+            if prepared.prepare_history is not None:
+                history = prepared.prepare_history(tuple(history))
             messages = (*prepared.messages[:-1], *history, prepared.messages[-1])
             result = prepared.runner.run(messages, budget=budget,
                 on_progress=(lambda kind, data: self._progress(record, kind, data)) if request.stream else None)
@@ -332,6 +350,12 @@ class AgentLoop:
         with self._condition:
             return tuple(_copy_record(record) for record in sorted(self._records_by_id.values(),
                          key=lambda record: record.created_at) if record.session_id == session_id)
+
+    def list_all_runs(self) -> tuple[RunRecord, ...]:
+        """Return a read-only snapshot for conversation discovery, including old scopes."""
+        with self._condition:
+            return tuple(_copy_record(record) for record in sorted(self._records_by_id.values(),
+                         key=lambda record: record.created_at))
 
     def _record(self, run_id: str) -> RunRecord:
         if run_id not in self._records_by_id:

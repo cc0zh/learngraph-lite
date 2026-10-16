@@ -41,4 +41,4 @@ COMMIT
 - 接受响应丢失，浏览器只GET同步图谱/状态，不猜测服务端未执行。
 - 旧题/包可读但不产生新成绩；历史反馈不污染新版本统计。
 
-关联：[history](../../histories/2026-10/20261013-2115-react-p0.md)、[执行计划](../../exec-plans/active/learngraph-lite-implementation.md)、[事务适配器](../../../src/learngraph_lite/infrastructure/proposal_persistence.py)。
+关联：[history](../../histories/2026-10/20261013-2115-react-p0.md)、[执行计划](../../exec-plans/active/learngraph-lite-implementation.md)。事务适配器在编辑器中查看 `src/learngraph_lite/infrastructure/proposal_persistence.py`；源码不是文档站页面。

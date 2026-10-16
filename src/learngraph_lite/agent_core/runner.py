@@ -63,7 +63,7 @@ class AgentRunner:
                         usage=usage,
                     )
 
-                for call in response.tool_calls:
+                for index, call in enumerate(response.tool_calls):
                     budget.take_tool_call()
                     started = monotonic()
                     if on_progress is not None:
@@ -94,9 +94,11 @@ class AgentRunner:
                         continue
                     try:
                         result = tool.execute(args)
+                        succeeded = not (isinstance(result, dict) and "error" in result)
                     except ToolError as exc:
                         result = {"error": str(exc)}
                         errors.append(str(exc))
+                        succeeded = False
                     transcript.append(
                         TextMessage(
                             role="tool",
@@ -109,6 +111,15 @@ class AgentRunner:
                         on_progress("tool.finished", {"call_id": call.id, "name": call.name,
                             "status": "failed" if isinstance(result, dict) and "error" in result else "completed",
                             "elapsed_ms": round((monotonic() - started) * 1000)})
+                    if succeeded and tool.ends_turn:
+                        # Pair the whole batch, without executing calls after user review.
+                        for skipped in response.tool_calls[index + 1:]:
+                            transcript.append(TextMessage(role="tool", tool_call_id=skipped.id,
+                                content=json.dumps({"skipped": "turn ended; waiting for user review"})))
+                            if on_progress is not None:
+                                on_progress("tool.finished", {"call_id": skipped.id, "name": skipped.name,
+                                                             "status": "skipped"})
+                        return RunnerResult("completed", tuple(transcript), response.content, tuple(errors), usage)
             raise BudgetExceeded("step budget exhausted")
         except BudgetExceeded as exc:
             errors.append(str(exc))

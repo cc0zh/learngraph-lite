@@ -1,4 +1,4 @@
-import { expect, learningGoal, runDTO, test } from './fixtures';
+import { openLearning, learningContent, workbenchURL, expect, learningGoal, runDTO, test } from './fixtures';
 
 for (const recovery of ['terminal-get-fails', 'terminal-found-by-query'] as const) {
   test(`P0: ${recovery} reconciles native-tool artifacts without another POST`, async ({ page, request }) => {
@@ -16,7 +16,7 @@ for (const recovery of ['terminal-get-fails', 'terminal-found-by-query'] as cons
     page.on('response', async response => {
       if (response.request().method() === 'POST' && response.url().includes('/sessions/') && response.status() === 202) runId = (await response.json()).run_id;
     });
-    await page.goto(`/goals/${goal}/learn`);
+    await openLearning(page, request, goal);
     await page.getByLabel('向当前节点提问').fill('请调用工具创建一道练习');
     await page.getByRole('button', { name: '发送问题' }).click();
     await expect.poll(() => runId).not.toBe('');
@@ -26,7 +26,8 @@ for (const recovery of ['terminal-get-fails', 'terminal-found-by-query'] as cons
     if (recovery === 'terminal-get-fails') await expect(page.getByRole('alert').first()).toContainText('终态已收到');
     await page.getByRole('button', { name: '查询运行状态', exact: true }).click();
     await expect(page.locator('.assistant-message')).toContainText('后续问题会结合本会话');
-    await expect(page.locator('.practice-panel .exercise')).toHaveCount(1);
+    await learningContent(page);
+    await expect(page.locator('.wb-exercises .exercise')).toHaveCount(1);
     await expect(page.getByRole('button', { name: '生成练习', exact: true })).toBeEnabled();
     expect(writes).toEqual([]);
   });
@@ -46,8 +47,9 @@ test('P0: Markdown never renders images or sends external image requests', async
   await page.route(`**/api/goals/${goal}/nodes/n/exercises`, route => route.fulfill({ json: { exercises: [
     { id: 'image-exercise', prompt: '练习正文 ![exercise](https://untrusted.invalid/exercise.png)', options: [] },
   ], feedback: {} } }));
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
   await expect(page.locator('.assistant-message')).toContainText('仍然可读');
+  await learningContent(page);
   await expect(page.locator('.exercise')).toContainText('练习正文');
   await expect(page.locator('.assistant-message a')).toHaveAttribute('href', 'https://untrusted.invalid/read');
   await expect(page.locator('.assistant-message img, .exercise img')).toHaveCount(0);
@@ -84,8 +86,8 @@ for (const failure of ['not-delivered', 'response-lost'] as const) {
       if (submissions.length === 1) await route.abort('failed');
       else await route.fulfill({ response });
     });
-    await page.goto(`/goals/${goal}/learn`);
-    await expect(page.getByLabel('节点对话记录')).toContainText('旧的已完成问题');
+    await page.goto(workbenchURL(goal, session));
+    await expect(page.getByLabel('当前会话记录')).toContainText('旧的已完成问题');
     await page.getByLabel('向当前节点提问').fill('最近未确认的问题，不能被历史命令盖掉');
     await page.getByRole('button', { name: '发送问题' }).click();
     const pending = page.getByRole('region', { name: '未确认请求恢复' });
@@ -94,6 +96,11 @@ for (const failure of ['not-delivered', 'response-lost'] as const) {
     await expect(pending.getByRole('button', { name: '重发未确认请求' })).toBeEnabled();
     expect(submissions).toHaveLength(1);
     expect(submissions[0].request_id).not.toBe(oldCommand.body.request_id);
+    if (failure === 'response-lost') {
+      // The lost response still admitted a run. Finish that fixture execution
+      // before reloading so its live SSE cannot invalidate the recovery GET.
+      await expect.poll(async () => (await (await request.get(`/api/runs/${recoveredIds[0]}`)).json()).status).toBe('completed');
+    }
     await page.reload();
     await expect(pending).toContainText('最近未确认的问题，不能被历史命令盖掉');
     await expect(pending).toContainText(String(submissions[0].request_id));
@@ -112,7 +119,7 @@ for (const failure of ['not-delivered', 'response-lost'] as const) {
     expect(history.filter((r: { user_text: string }) => r.user_text === submissions[0].user_text)).toHaveLength(1);
     await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0);
     await page.reload();
-    await expect(page.getByLabel('节点对话记录')).toContainText('最近未确认的问题，不能被历史命令盖掉');
+    await expect(page.getByLabel('当前会话记录')).toContainText('最近未确认的问题，不能被历史命令盖掉');
     await expect(pending).not.toBeVisible();
     expect(submissions).toHaveLength(2);
   });
@@ -120,7 +127,7 @@ for (const failure of ['not-delivered', 'response-lost'] as const) {
 
 test('P0: recovery queries before resending, and a failed recovered run retries with a new linked ID', async ({ page, request }) => {
   const goal = await learningGoal(request);
-  const session = `learn:${goal}:n`;
+  const session = goal;
   const command = { path: `/sessions/${session}/runs`, body: { request_id: crypto.randomUUID(), user_text: '恢复失败任务的完整输入', goal_id: goal, node_id: 'n', mode: 'teaching' } };
   await page.addInitScript(({ session, command }) => localStorage.setItem(`learngraph:command:${session}:pending`, JSON.stringify(command)), { session, command });
   const submissions: Record<string, unknown>[] = [];
@@ -136,10 +143,10 @@ test('P0: recovery queries before resending, and a failed recovered run retries 
     const input = route.request().postDataJSON();
     submissions.push(input);
     const run = runDTO(submissions.length === 1 ? 'recovered-failed' : 'recovered-retry', input.user_text,
-      submissions.length === 1 ? 'failed' : 'completed');
+      submissions.length === 1 ? 'failed' : 'completed', submissions.length === 1 ? '' : '重试后的回答已完成');
     await route.fulfill({ status: 202, json: { ...run, error: submissions.length === 1 ? '模拟执行失败' : null } });
   });
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
   const pending = page.getByRole('region', { name: '未确认请求恢复' });
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(pending.getByRole('button', { name: '重发未确认请求' })).toBeDisabled();
@@ -148,10 +155,11 @@ test('P0: recovery queries before resending, and a failed recovered run retries 
   await pending.getByRole('button', { name: '查询运行状态' }).click();
   await expect(pending.getByRole('button', { name: '重发未确认请求' })).toBeEnabled();
   await pending.getByRole('button', { name: '重发未确认请求' }).click();
-  await expect(page.locator('.assistant-message')).toContainText('模拟执行失败');
+  await expect(page.locator('.wb-conversation > .run-status')).toContainText('模拟执行失败');
   expect(submissions).toEqual([command.body]);
   await page.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(page.locator('.assistant-message').last()).toContainText('模拟回答已完成');
+  await expect.poll(() => submissions.length).toBe(2);
+  await expect(page.locator('.assistant-message').last()).toContainText('重试后的回答已完成');
   expect(submissions[1]).toEqual({ ...command.body, request_id: submissions[1].request_id, retry_of_run_id: 'recovered-failed' });
   expect(submissions[1].request_id).not.toBe(command.body.request_id);
 });
@@ -168,15 +176,15 @@ test('P0: delayed initial history cannot overwrite a newly acknowledged run', as
       await route.fulfill({ json: [] });
     } else await route.fulfill({ status: 202, json: runDTO('new-run', route.request().postDataJSON().user_text) });
   });
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
   await initialQuery;
   await page.getByLabel('向当前节点提问').fill('新运行不能被旧列表抹掉');
   await page.getByRole('button', { name: '发送问题' }).click();
-  await expect(page.getByLabel('节点对话记录')).toContainText('新运行不能被旧列表抹掉');
+  await expect(page.getByLabel('当前会话记录')).toContainText('新运行不能被旧列表抹掉');
   const response = page.waitForResponse(r => r.url().includes('/sessions/') && r.request().method() === 'GET');
   release(); await response;
   await page.evaluate(() => new Promise(requestAnimationFrame));
-  await expect(page.getByLabel('节点对话记录')).toContainText('新运行不能被旧列表抹掉');
+  await expect(page.getByLabel('当前会话记录')).toContainText('新运行不能被旧列表抹掉');
   await expect(page.locator('.assistant-message')).toContainText('模拟回答已完成');
 });
 
@@ -191,13 +199,14 @@ for (const status of [422, 409]) {
       if (submissions.length === 1) await route.fulfill({ status, json: { error: { message: '明确业务拒绝' } } });
       else await route.fulfill({ status: 202, json: runDTO('after-rejection', input.user_text) });
     });
-    await page.goto(`/goals/${goal}/learn`);
+    await openLearning(page, request, goal);
     await page.getByLabel('向当前节点提问').fill('业务拒绝后保留我的问题');
     await page.getByRole('button', { name: '发送问题' }).click();
     await expect(page.getByRole('alert')).toContainText('请求被拒绝');
     await expect(page.getByLabel('向当前节点提问')).toHaveValue('业务拒绝后保留我的问题');
     await expect(page.getByRole('region', { name: '未确认请求恢复' })).not.toBeVisible();
     await expect(page.getByRole('button', { name: '发送问题' })).toBeEnabled();
+    await learningContent(page);
     await expect(page.getByRole('button', { name: '生成练习', exact: true })).toBeEnabled();
     expect(submissions).toHaveLength(1);
     await page.getByRole('button', { name: '发送问题' }).click();
@@ -219,17 +228,20 @@ test('P0: long node scopes use a persisted bounded session for chat, exercises a
     if (match && req.method() === 'POST' && req.postDataJSON().mode === 'teaching') submittedSessionIds.push(decodeURIComponent(match[1]));
     if (req.method() === 'POST' && req.url().endsWith('/exercises')) { sessionIds.push(req.postDataJSON().session_id); submittedSessionIds.push(req.postDataJSON().session_id); }
   });
-  await page.goto(`/goals/${goal}/learn`);
-  await expect(page.getByRole('heading', { name: '错误与恢复' })).toBeVisible();
+  const session = await openLearning(page, request, goal, node);
+  await expect(page.getByLabel('当前对话范围')).toContainText('错误与恢复');
   await page.getByLabel('向当前节点提问').fill('合法最长节点 ID 仍能学习');
   await page.getByRole('button', { name: '发送问题' }).click();
   await expect(page.locator('.assistant-message')).toContainText('后续问题会结合本会话的完整回合。');
+  await learningContent(page);
   await page.getByRole('button', { name: '生成练习', exact: true }).click();
   await expect(page.getByRole('radio')).toHaveCount(3);
   await page.reload();
-  await expect(page.getByLabel('节点对话记录')).toContainText('合法最长节点 ID 仍能学习');
+  await expect(page.getByLabel('当前会话记录')).toContainText('合法最长节点 ID 仍能学习');
   await expect(page.getByRole('radio')).toHaveCount(3);
-  const teachingSession = await page.evaluate(scope => localStorage.getItem(`learngraph:session:${scope}`), `learn:${goal}:${node}`);
+  const teachingSession = new URL(page.url()).searchParams.get('session');
+  expect(teachingSession).toBe(session);
+  expect((await (await request.get(`/api/conversations/${session}`)).json()).node_id).toBe(node);
   expect(sessionIds.filter(id => id === teachingSession).length).toBeGreaterThanOrEqual(4);
   expect(new Set(submittedSessionIds).size).toBe(1);
   expect(submittedSessionIds[0]).toHaveLength(36);
@@ -238,65 +250,54 @@ test('P0: long node scopes use a persisted bounded session for chat, exercises a
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
-test('P0: completion and manual refresh protect dirty goal and graph edits independently', async ({ page, request }) => {
-  const goal = await learningGoal(request, 'n', false);
-  await page.goto(`/goals/${goal}/plan`);
-  await page.getByText('高级：图谱与节点编辑', { exact: true }).click();
-  await expect(page.getByLabel('节点标题')).toHaveValue('错误与恢复');
-  let release = () => {};
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  let started = () => {};
-  const refreshStarted = new Promise<void>(resolve => { started = resolve; });
-  let queryCount = 0;
-  let completedQueries = 0;
-  await page.route(`**/api/goals/${goal}`, async route => {
-    if (route.request().method() !== 'GET') { await route.continue(); return; }
-    const response = await route.fetch();
-    queryCount++;
-    if (queryCount === 1) { started(); await gate; }
-    await route.fulfill({ response });
-    completedQueries++;
+for (const dirty of ['goal', 'graph'] as const) {
+  test(`P0: completion and manual refresh protect dirty ${dirty} edits without unlocking conflicting writes`, async ({ page, request }) => {
+    const goal = await learningGoal(request, 'n', false);
+    await page.goto(workbenchURL(goal, `planning:${goal}`, 'graph'));
+    await page.getByText('图谱与节点编辑', { exact: true }).click();
+    await expect(page.getByLabel('节点标题')).toHaveValue('错误与恢复');
+    let release = () => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let started = () => {};
+    const refreshStarted = new Promise<void>(resolve => { started = resolve; });
+    let queryCount = 0;
+    let completedQueries = 0;
+    await page.route(`**/api/goals/${goal}`, async route => {
+      if (route.request().method() !== 'GET') { await route.continue(); return; }
+      const response = await route.fetch();
+      if (++queryCount === 1) { started(); await gate; }
+      await route.fulfill({ response }); completedQueries++;
+    });
+    await page.route(`**/api/goals/${goal}/graph-drafts`, route => route.fulfill({ status: 202,
+      json: { ...runDTO('graph-complete', '', 'completed'), mode: 'graph' } }));
+    await page.getByRole('button', { name: '重新生成图谱', exact: true }).click();
+    await refreshStarted;
+    const field = dirty === 'goal' ? page.getByRole('textbox', { name: '期望成果', exact: true }) : page.getByLabel('节点标题');
+    const input = dirty === 'goal' ? '本地未保存的目标成果' : '本地未保存的节点标题';
+    try { await field.fill(input); } finally { release(); }
+    await expect.poll(() => completedQueries).toBe(1);
+    await expect(field).toHaveValue(input);
+    await page.getByRole('button', { name: '刷新目标与图谱', exact: true }).click();
+    await expect.poll(() => completedQueries).toBe(2);
+    await expect(field).toHaveValue(input);
+    await expect(page.getByText('有未确认或未保存修改，请先保存。')).toBeVisible();
+    await expect(page.getByRole('button', { name: '审核完成，发布图谱', exact: true })).toBeDisabled();
+    if (dirty === 'goal') {
+      await expect(page.getByLabel('节点标题')).toBeDisabled();
+      await page.getByRole('button', { name: '确认目标摘要', exact: true }).click();
+      const saved = await (await request.get(`/api/goals/${goal}`)).json();
+      expect(saved.goal.desired_outcome).toBe(input);
+      expect(saved.goal.confirmed).toBe(true);
+      expect(saved.graph).toBeNull(); // Reconfirmation still atomically invalidates the old draft.
+      await expect(page.getByRole('button', { name: '生成图谱草稿', exact: true })).toBeEnabled();
+    } else {
+      await expect(page.getByRole('button', { name: '确认目标摘要', exact: true })).toBeDisabled();
+      await page.getByRole('button', { name: '保存图谱修改', exact: true }).click();
+      await expect(page.getByText('有未确认或未保存修改，请先保存。')).not.toBeVisible();
+      await expect(page.getByRole('button', { name: '审核完成，发布图谱', exact: true })).toBeEnabled();
+      const saved = await (await request.get(`/api/goals/${goal}`)).json();
+      expect(saved.graph.status).toBe('draft');
+      expect(saved.graph.nodes[0].title).toBe(input);
+    }
   });
-  await page.route(`**/api/goals/${goal}/graph-drafts`, route => route.fulfill({ status: 202,
-    json: { ...runDTO('graph-complete', '', 'completed'), mode: 'graph' } }));
-  await page.getByRole('button', { name: '重新生成' }).click();
-  await refreshStarted; // Completion-triggered read remains in flight while editing.
-  await page.getByLabel('节点标题').fill('本地未保存的节点标题');
-  await page.getByRole('button', { name: '修改目标' }).click();
-  await expect(page.getByRole('heading', { name: '目标摘要', level: 3 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '希望学到什么程度？' })).not.toBeVisible();
-  await page.getByRole('textbox', { name: '期望成果', exact: true }).fill('本地未保存的目标成果');
-  release();
-  await expect.poll(() => completedQueries).toBe(1);
-  await page.evaluate(() => new Promise(requestAnimationFrame));
-  await expect(page.getByRole('textbox', { name: '期望成果', exact: true })).toHaveValue('本地未保存的目标成果');
-  await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
-  await page.getByRole('button', { name: '刷新目标与路线' }).click();
-  await expect.poll(() => completedQueries).toBe(2);
-  await page.evaluate(() => new Promise(requestAnimationFrame));
-  await expect(page.getByRole('textbox', { name: '期望成果', exact: true })).toHaveValue('本地未保存的目标成果');
-  await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
-  await expect(page.getByText('有未保存修改，请先保存。')).toBeVisible();
-  const goalWrites: string[] = [];
-  page.on('request', req => {
-    if (req.url().endsWith(`/api/goals/${goal}`) && req.method() === 'PATCH') goalWrites.push('PATCH');
-    if (req.url().endsWith(`/api/goals/${goal}/confirm`) && req.method() === 'POST') goalWrites.push('POST confirm');
-  });
-  await page.getByRole('button', { name: '确认目标摘要', exact: true }).click();
-  await expect.poll(async () => (await (await request.get(`/api/goals/${goal}`)).json()).goal.desired_outcome).toBe('本地未保存的目标成果');
-  const reconfirmed = await (await request.get(`/api/goals/${goal}`)).json();
-  expect(reconfirmed.goal.confirmed).toBe(true);
-  expect(reconfirmed.graph).toBeNull(); // Changed goals invalidate the old server route atomically.
-  expect(goalWrites).toEqual(['POST confirm']);
-  await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
-  await expect(page.getByText('有未保存修改，请先保存。')).toBeVisible();
-  await expect(page.getByRole('button', { name: '审核完成，发布路线' })).toBeDisabled();
-  await page.getByRole('button', { name: '保存路线修改' }).click();
-  await expect(page.getByText('有未保存修改，请先保存。')).not.toBeVisible();
-  await expect(page.locator('dl')).toContainText('本地未保存的目标成果');
-  await expect(page.getByLabel('节点标题')).toHaveValue('本地未保存的节点标题');
-  await expect(page.getByRole('button', { name: '审核完成，发布路线' })).toBeEnabled();
-  const saved = await (await request.get(`/api/goals/${goal}`)).json();
-  expect(saved.graph.status).toBe('draft');
-  expect(saved.graph.nodes[0].title).toBe('本地未保存的节点标题');
-});
+}

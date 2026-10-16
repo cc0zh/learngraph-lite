@@ -14,10 +14,19 @@ export function orderedStages(graph: Graph): GraphNode[] {
   return result;
 }
 
-export function RouteOverview({ graph, goal }: { graph: Graph; goal: Goal }) {
+export function RouteOverview({ graph, goal, knowledgeMap = false }: { graph: Graph; goal: Goal; knowledgeMap?: boolean }) {
   const stages = orderedStages(graph);
   const minutes = graph.nodes.reduce((sum, node) => sum + node.estimated_minutes, 0);
   const budget = goal.time_budget_minutes ?? 240;
+  if (knowledgeMap) return <div className="route-overview knowledge-map-overview">
+    <h3>这些主题是否覆盖你想了解的内容？</h3>
+    <p>围绕「{goal.title}」整理了 {graph.nodes.length} 个知识节点。图谱用于理解主题之间的联系，不要求把探索收窄成项目交付。</p>
+    <p className="muted small">可以从感兴趣的节点开始；连线表示已标明的前置关系，不是一条必须依次完成的任务清单。学习建议和时间估算仅供参考。</p>
+    <ul className="wb-map-topics" aria-label="图谱知识节点">{graph.nodes.map(node => <li key={node.id}>
+      <h3>{node.title}</h3><p>{node.explanation}</p>
+      {node.learning_outcome && <p className="muted small">理解参考：{node.learning_outcome}</p>}
+    </li>)}</ul>
+  </div>;
   return <div className="route-overview">
     <h3>这是不是你想学的？</h3>
     <p>围绕「{goal.title}」，逐步达到：{goal.desired_outcome || '理解核心概念、完成适合主题的练习并解释结果'}。</p>

@@ -136,15 +136,19 @@ class PlanningService:
     def describe(self, goal_id: str) -> dict:
         return {"goal_id": goal_id, **asdict(self.get_state(goal_id))}
 
-    def edit_goal(self, goal_id: str, expected_version: int, **fields: object) -> None:
+    def edit_goal(self, goal_id: str, expected_version: int, *, before_save: Callable[[], None] | None = None,
+                  **fields: object) -> PlanningState:
         def update(state):
             self.check_version(state, expected_version)
             self._require_editable(state)
+            if before_save is not None:
+                before_save()
             state.goal = self._merge_goal(state.goal, fields)
             state.questions = ()
             # Any old candidate was based on the previous goal.
             state.graph = None
-        self._mutate(goal_id, update)
+            return state
+        return self._mutate(goal_id, update)
 
     def save_clarification(self, goal_id: str, expected_version: int, questions: tuple[str, ...],
                            before_save: Callable[[], None]) -> PlanningState:

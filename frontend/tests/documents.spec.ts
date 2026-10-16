@@ -1,10 +1,10 @@
-import { expect, learningGoal, test } from './fixtures';
+import { openLearning, expect, learningGoal, test } from './fixtures';
 
 test('P1: upload, persist, explicitly bind goal/node, locate/search/cite, unbind and delete', async ({ page, request }) => {
   const goal = await learningGoal(request);
   const name = `资料验收-${Date.now()}.md`;
   const original = '# 错误与恢复\n错误与恢复需要显式查询状态，不自动重发。\n<img src="https://untrusted.invalid/x" onerror="alert(1)">\n';
-  await page.goto('/documents');
+  await page.goto('/?tool=documents');
   await expect(page.getByRole('heading', { name: '我的资料', exact: true })).toBeVisible();
   await page.getByLabel('选择资料文件').setInputFiles({ name, mimeType: 'text/markdown', buffer: Buffer.from(original) });
   const uploaded = page.waitForResponse(r => r.url().endsWith('/api/documents') && r.request().method() === 'POST');
@@ -42,31 +42,36 @@ test('P1: upload, persist, explicitly bind goal/node, locate/search/cite, unbind
   await expect(nodeBindings.getByRole('region', { name: '资料检索结果' })).toContainText('错误与恢复');
   await nodeBindings.getByRole('link', { name: '查看片段原文' }).first().click();
   await expect(page.locator('[data-selected-chunk="true"]')).toBeVisible();
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
   await page.getByLabel('向当前节点提问').fill('检索错误与恢复资料，使用原文引用解释');
   await page.getByRole('button', { name: '发送问题' }).click();
   const citations = page.locator('.assistant-message').last().getByRole('region', { name: '资料引用' });
   await expect(citations.getByRole('button', { name: /C1.*查看原文/ })).toBeVisible();
   await citations.getByRole('button', { name: /C1.*查看原文/ }).click();
-  await expect(page).toHaveURL(new RegExp(`/documents/${doc.document_id}\\?`));
+  await expect.poll(() => new URL(page.url()).searchParams.get('document')).toBe(doc.document_id);
+  expect(new URL(page.url()).searchParams.get('tool')).toBe('document');
+  expect(new URL(page.url()).searchParams.get('goal')).toBe(goal);
+  expect(new URL(page.url()).searchParams.get('session')).toBe(goal);
   await expect(page.locator('[data-selected-chunk="true"]')).toBeVisible();
   await page.getByLabel('绑定节点').selectOption('');
   page.once('dialog', dialog => dialog.accept());
+  const unbound = page.waitForResponse(r => r.url().includes('/document-bindings') && r.request().method() === 'DELETE');
   await page.getByRole('region', { name: '目标资料绑定' }).getByRole('button', { name: '解绑资料' }).click();
+  expect((await unbound).ok()).toBe(true);
   const nodeState = await request.get(`/api/goals/${goal}/document-bindings?node_id=n`);
   expect((await nodeState.json()).document_ids).toEqual([]);
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
   const restored = page.locator('.assistant-message').last().getByRole('region', { name: '资料引用' });
   // Completed run sources are snapshots: the click must revalidate live bindings.
   await restored.getByRole('button', { name: /C1.*查看原文/ }).click();
   await expect(restored).toContainText('409');
-  await page.goto(`/documents/${doc.document_id}`);
+  await page.goto(`/?tool=document&document=${doc.document_id}`);
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: '删除资料', exact: true }).click();
-  await expect(page).toHaveURL(/\/documents$/);
+  await expect.poll(() => new URL(page.url()).searchParams.get('tool')).toBe('documents');
   await expect(page.getByRole('link', { name, exact: true })).toHaveCount(0);
   expect((await request.get(`/api/documents/${doc.document_id}`)).status()).toBe(404);
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
   await restored.getByRole('button', { name: /C1.*查看原文/ }).click();
   await expect(restored).toContainText('409');
 });
@@ -80,22 +85,22 @@ test('P1: chunk pagination, deep link, unsupported format, reparse and responsiv
   const doc = await uploaded.json();
   await expect.poll(async () => (await (await request.get(`/api/documents/${doc.document_id}`)).json()).status).toBe('ready');
   const chunks = await (await request.get(`/api/documents/${doc.document_id}/chunks?offset=50&limit=50`)).json();
-  await page.goto(`/documents/${doc.document_id}?chunk=${encodeURIComponent(chunks.chunks[0].id)}`);
+  await page.goto(`/?tool=document&document=${doc.document_id}&chunk=${encodeURIComponent(chunks.chunks[0].id)}`);
   await expect(page.locator('[data-selected-chunk="true"]')).toContainText('分页原文 51');
   await page.getByRole('button', { name: '上一页原文' }).click();
   await expect(page.getByRole('region', { name: '资料原文' })).toContainText('分页原文 1');
-  await page.goto(`/documents/${doc.document_id}?chunk=unknown-chunk`);
+  await page.goto(`/?tool=document&document=${doc.document_id}&chunk=unknown-chunk`);
   await expect(page.getByRole('alert')).toContainText('指定片段不存在');
   for (const width of [375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   }
-  await page.goto('/documents');
+  await page.goto('/?tool=documents');
   await page.getByLabel('选择资料文件').setInputFiles({ name: `unsupported-${Date.now()}.bin`, mimeType: 'application/octet-stream', buffer: Buffer.from('not supported') });
   const response = page.waitForResponse(r => r.url().endsWith('/api/documents') && r.request().method() === 'POST');
   await page.getByRole('button', { name: '上传资料', exact: true }).click();
   const unsupported = await (await response).json();
-  await page.goto(`/documents/${unsupported.document_id}`);
+  await page.goto(`/?tool=document&document=${unsupported.document_id}`);
   await expect(page.getByRole('status').filter({ hasText: '不支持' }).first()).toBeVisible();
   await expect(page.getByText('支持 UTF-8 TXT / Markdown 和含文本的 PDF', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: '重新解析', exact: true }).click();
@@ -107,7 +112,7 @@ test('P1: oversized uploads and parser failure have explicit recovery without re
     name: 'too-large.txt', mimeType: 'text/plain', buffer: Buffer.alloc(10 * 1024 * 1024 + 1, 97),
   } } });
   expect(tooLarge.status()).toBe(413);
-  await page.goto('/documents');
+  await page.goto('/?tool=documents');
   await page.getByLabel('选择资料文件').setInputFiles({ name: 'too-large.txt', mimeType: 'text/plain', buffer: Buffer.alloc(10 * 1024 * 1024 + 1, 97) });
   await page.getByRole('button', { name: '上传资料', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('文件超过 10 MB');
@@ -116,7 +121,7 @@ test('P1: oversized uploads and parser failure have explicit recovery without re
   } } });
   expect(response.ok()).toBe(true);
   const doc = await response.json();
-  await page.goto(`/documents/${doc.document_id}`);
+  await page.goto(`/?tool=document&document=${doc.document_id}`);
   await expect(page.getByRole('status').filter({ hasText: '解析失败' })).toBeVisible();
   await expect(page.getByText('提取文本超过 20 万字符，请拆分文件。', { exact: false })).toBeVisible();
   const writes: string[] = [];

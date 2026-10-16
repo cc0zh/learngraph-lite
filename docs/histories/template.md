@@ -8,7 +8,7 @@
 
 ### 📥 User Query
 
-> {用户Query原文，或者压缩后的脱敏版本}
+> `用户 Query 原文，或者压缩后的脱敏版本`
 
 ### 🛠 Changes Overview
 

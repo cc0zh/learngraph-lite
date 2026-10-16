@@ -1,22 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
+import { navigateWorkbench, workbenchHref } from '../workbench/navigation';
 import { DocumentBindings } from './DocumentBindings';
 import { documentError, documentPath, documentRequest } from './http';
-import { DocumentError, DocumentStatus, PAGE_SIZE, Pagination, parsing } from './shared';
+import { DocumentError, DocumentLink, DocumentStatus, PAGE_SIZE, Pagination, parsing } from './shared';
 import type { ChunkPage, DocumentBinding, PublicDocument } from './types';
 import './documents.css';
 
 interface GoalScope { goal_id: string; goal: { title: string }; graph: { nodes: { id: string; title: string }[] } | null }
-export function DocumentDetail({ documentId }: { documentId: string }) {
-  return <DetailScope key={documentId} documentId={documentId}/>;
+export interface DocumentDetailProps { documentId: string; query?: string }
+export function DocumentDetail({ documentId, query = window.location.search }: DocumentDetailProps) {
+  return <DetailScope key={`${documentId}:${query}`} documentId={documentId} query={query}/>;
 }
-function DetailScope({ documentId }: { documentId: string }) {
-  const query = new URLSearchParams(location.search);
+function DetailScope({ documentId, query: search }: Required<DocumentDetailProps>) {
+  const query = new URLSearchParams(search);
   const targetChunk = query.get('chunk') || '';
+  const hasSourceScope = query.has('source_goal') || query.has('source_node');
+  const goalId = query.get(hasSourceScope ? 'source_goal' : 'goal') || '';
+  const nodeId = query.get(hasSourceScope ? 'source_node' : 'node') || '';
   const [document, setDocument] = useState<PublicDocument>();
   const [bindings, setBindings] = useState<DocumentBinding[]>([]);
   const [goals, setGoals] = useState<GoalScope[]>([]);
-  const [goalId, setGoalId] = useState(query.get('goal') || '');
-  const [nodeId, setNodeId] = useState(query.get('node') || '');
   const [offset, setOffset] = useState(0);
   const [chunks, setChunks] = useState<ChunkPage>();
   const [loading, setLoading] = useState(true);
@@ -27,6 +30,8 @@ function DetailScope({ documentId }: { documentId: string }) {
   const [chunkError, setChunkError] = useState('');
   const [targetError, setTargetError] = useState('');
   const [refresh, setRefresh] = useState(0);
+  const operationActive = useRef(true);
+  useEffect(() => { operationActive.current = true; return () => { operationActive.current = false; }; }, []);
   const located = useRef('');
   const selectedChunk = useRef<HTMLElement | null>(null);
   const path = documentPath(documentId);
@@ -85,11 +90,11 @@ function DetailScope({ documentId }: { documentId: string }) {
     selectedChunk.current.focus({ preventScroll: true }); selectedChunk.current.scrollIntoView({ block: 'nearest' });
   }, [chunks, chunkLoading]);
   function chooseScope(goal: string, node: string) {
-    setGoalId(goal); setNodeId(node);
-    const parameters = new URLSearchParams(location.search);
-    if (goal) parameters.set('goal', goal); else parameters.delete('goal');
-    if (node) parameters.set('node', node); else parameters.delete('node');
-    history.replaceState(null, '', `${path}${parameters.size ? `?${parameters}` : ''}`);
+    const parameters = new URLSearchParams(search);
+    // An explicitly empty source goal must not fall back to the conversation goal.
+    parameters.set('source_goal', goal);
+    if (node) parameters.set('source_node', node); else parameters.delete('source_node');
+    navigateWorkbench(workbenchHref({ tool: 'document', document: documentId }, parameters.toString()));
   }
   async function reparse() {
     if (busy) return; setBusy(true); setError('');
@@ -100,14 +105,18 @@ function DetailScope({ documentId }: { documentId: string }) {
   async function remove() {
     if (busy || !window.confirm('确认删除此资料及所有目标、节点绑定？删除后不能恢复，旧引用会降级为不可用。')) return;
     setBusy(true); setError('');
-    try { await documentRequest<{ deleted: boolean }>(path, { method: 'DELETE' }); window.location.assign('/documents'); }
+    const origin = window.location.href;
+    try {
+      await documentRequest<{ deleted: boolean }>(path, { method: 'DELETE' });
+      if (window.location.href === origin && operationActive.current) navigateWorkbench(workbenchHref({ tool: 'documents', document: undefined, chunk: undefined }, search));
+    }
     catch (e) { setError(documentError(e)); }
     finally { setBusy(false); }
   }
   const selectedGoal = goals.find(goal => goal.goal_id === goalId);
   const validScope = !!selectedGoal && (!nodeId || selectedGoal.graph?.nodes.some(node => node.id === nodeId));
   const hasScopeBinding = bindings.some(binding => binding.goal_id === goalId && binding.node_id === (nodeId || null));
-  return <div className="page documents-scope"><header className="doc-heading"><div><p className="eyebrow">资料原文</p><h1>{document?.filename || '资料详情'}</h1></div><a href="/documents">返回资料列表</a></header>
+  return <section className="documents-scope documents-tool" aria-label="资料详情"><header className="doc-heading"><div><p className="eyebrow">资料原文</p><h1>{document?.filename || '资料详情'}</h1></div><DocumentLink href={workbenchHref({ tool: 'documents', document: undefined, chunk: undefined }, search)}>返回资料列表</DocumentLink></header>
     <DocumentError error={error}/>{loading && <p role="status">正在读取资料…</p>}
     {document && <><section className="doc-panel"><DocumentStatus document={document}/>
       <p className="doc-muted">{(document.size_bytes / 1024).toFixed(1)} KB · 资料版本 {document.revision} · {document.kind || '未知格式'}</p>
@@ -129,17 +138,22 @@ function DetailScope({ documentId }: { documentId: string }) {
           <pre className="doc-plain">{chunk.text}</pre>
         </article>)}</>}
     </section><aside className="doc-sidebar"><section className="doc-panel"><h2>绑定到目标 / 节点</h2><DocumentError error={scopeError}/>
-      <label>绑定目标<select value={goalId} onChange={e => chooseScope(e.target.value, '')}><option value="">请选择学习目标</option>{goals.map(goal => <option key={goal.goal_id} value={goal.goal_id}>{goal.goal.title}</option>)}</select></label>
-      {selectedGoal && <label>绑定节点<select value={nodeId} onChange={e => chooseScope(goalId, e.target.value)}><option value="">目标级（先绑定目标）</option>{selectedGoal.graph?.nodes.map(node => <option key={node.id} value={node.id}>{node.title}</option>)}</select></label>}
+      <label>绑定目标<select aria-label="绑定目标" value={goalId} onChange={e => chooseScope(e.target.value, '')}><option value="">请选择学习目标</option>{goals.map(goal => <option key={goal.goal_id} value={goal.goal_id}>{goal.goal.title}</option>)}</select></label>
+      {selectedGoal && <label>绑定节点<select aria-label="绑定节点" value={nodeId} onChange={e => chooseScope(goalId, e.target.value)}><option value="">目标级（先绑定目标）</option>{selectedGoal.graph?.nodes.map(node => <option key={node.id} value={node.id}>{node.title}</option>)}</select></label>}
       {goalId && !validScope && <p className="doc-warning">指定目标或节点不存在，请重新选择有效的绑定范围。</p>}
       {validScope && !loading && !hasScopeBinding && <p className="doc-warning">409 · 此资料尚未绑定当前{nodeId ? '节点' : '目标'}，不能作为该范围的有效来源；原文仍可独立浏览。</p>}
     </section>
     {validScope && <DocumentBindings key={`${goalId}:${nodeId}:${document.status}`} goalId={goalId} nodeId={nodeId || undefined} defaultDocumentId={documentId} onChanged={() => setRefresh(n => n + 1)}/>}
     <section className="doc-panel"><h2>服务器保存的关联</h2><p className="doc-muted">此清单从服务器读取，绑定后会重新查询；也可点击“刷新资料状态”。</p>
       {!bindings.length ? <p>尚无关联。</p> : <ul className="doc-associations">{bindings.map(binding => <li key={`${binding.goal_id}:${binding.node_id || ''}`}>
-        <a href={`/goals/${encodeURIComponent(binding.goal_id)}/${binding.node_id ? 'learn' : 'plan'}`}>{goals.find(goal => goal.goal_id === binding.goal_id)?.goal.title || binding.goal_id}</a>
+        <DocumentLink href={workbenchHref({
+          goal: binding.goal_id,
+          session: query.get('goal') === binding.goal_id ? query.get('session') || undefined : undefined,
+          tool: undefined, document: undefined, chunk: undefined, source_goal: undefined, source_node: undefined,
+          node: binding.node_id || undefined, mode: undefined,
+        }, search)}>{goals.find(goal => goal.goal_id === binding.goal_id)?.goal.title || binding.goal_id}</DocumentLink>
         <p>{binding.node_id ? `节点：${goals.find(goal => goal.goal_id === binding.goal_id)?.graph?.nodes.find(node => node.id === binding.node_id)?.title || binding.node_id}` : '目标级绑定（不自动继承到节点）'}</p>
       </li>)}</ul>}
     </section></aside></div></>}
-  </div>;
+  </section>;
 }

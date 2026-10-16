@@ -1,4 +1,4 @@
-import { expect, learningGoal, test } from './fixtures';
+import { openLearning, learningContent, expect, learningGoal, test } from './fixtures';
 
 test('P1: proposal generation failure uses explicit linked retry (mock model DTOs)', async ({ page, request }) => {
   const goal = await learningGoal(request);
@@ -10,7 +10,8 @@ test('P1: proposal generation failure uses explicit linked retry (mock model DTO
       final_text: bodies.length === 1 ? '' : '模拟模型重试已完成', error: bodies.length === 1 ? '模拟提案模型失败' : null,
       created_at: new Date().toISOString(), tool_activity: {} } });
   });
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await page.getByRole('button', { name: '图谱管理', exact: true }).click();
   const panel = page.getByRole('region', { name: '路线调整提案' });
   await panel.getByRole('button', { name: '让 Agent 生成调整提案' }).click();
   await expect(panel).toContainText('模拟提案模型失败');
@@ -33,20 +34,22 @@ test('P1: lost accept response reconciles the published graph and status without
   await page.route(`**/api/goals/${goal}/graph-proposals/${proposal.id}/decision`, async route => {
     decisions++; expect((await route.fetch()).status()).toBe(200); await route.abort('failed');
   });
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await page.getByRole('button', { name: '图谱管理', exact: true }).click();
   const panel = page.getByRole('region', { name: '路线调整提案' });
   page.once('dialog', dialog => dialog.accept());
   await panel.getByRole('button', { name: '接受提案并发布' }).click();
   await expect(panel.getByRole('heading', { name: '已接受', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '响应丢失后的新路线', exact: true })).toBeVisible();
+  await expect(page.getByRole('list', { name: '图谱知识节点', exact: true })).toContainText('响应丢失后的新路线');
   await panel.getByRole('button', { name: '刷新提案与状态' }).click();
-  await expect(page.locator('.route-list')).toContainText('响应丢失后的新路线');
+  await expect(page.getByRole('list', { name: '图谱知识节点', exact: true })).toContainText('响应丢失后的新路线');
   expect(decisions).toBe(1);
 });
 
 test('P1: generated proposal stays pending, accepts atomically, preserves read-only history and reloads without writes', async ({ page, request }) => {
   const goal = await learningGoal(request);
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await learningContent(page);
   await page.getByRole('button', { name: '生成练习', exact: true }).click();
   await expect(page.getByRole('radio')).toHaveCount(3);
   await page.getByRole('radio', { name: '解释原理并完成一个例子' }).check();
@@ -57,16 +60,19 @@ test('P1: generated proposal stays pending, accepts atomically, preserves read-o
   await page.getByRole('button', { name: '生成学习包', exact: true }).click();
   await expect(page.getByRole('article', { name: '学习包详情' })).toBeVisible();
   const before = await (await request.get(`/api/goals/${goal}`)).json();
+  await page.getByRole('button', { name: '图谱管理', exact: true }).click();
   const panel = page.getByRole('region', { name: '路线调整提案' });
   await panel.getByRole('button', { name: '让 Agent 生成调整提案' }).click();
   await expect(panel.getByRole('heading', { name: '待审核', exact: true })).toBeVisible();
   const pending = await (await request.get(`/api/goals/${goal}/graph-proposals`)).json();
   expect(pending.proposals).toHaveLength(1);
   expect((await (await request.get(`/api/goals/${goal}`)).json()).graph).toEqual(before.graph);
-  await expect(page.locator('.progress-card')).toContainText('1 个有效样本');
+  expect((await (await request.get(`/api/goals/${goal}/nodes/n/context`)).json()).node.sample_count).toBe(1);
   page.once('dialog', dialog => dialog.accept());
   await panel.getByRole('button', { name: '接受提案并发布' }).click();
   await expect(panel.getByRole('heading', { name: '已接受', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '返回工作台浏览节点', exact: true }).click();
+  await learningContent(page);
   await expect(page.locator('.progress-card')).toContainText('0 个有效样本');
   await expect(page.getByRole('article', { name: '学习包详情' })).toContainText('内容版本已过期');
   await expect(page.getByRole('article', { name: '学习包详情' }).getByRole('button', { name: '提交答案' })).toBeDisabled();
@@ -76,8 +82,9 @@ test('P1: generated proposal stays pending, accepts atomically, preserves read-o
   const writes: string[] = [];
   page.on('request', r => { if (!['GET', 'HEAD'].includes(r.method())) writes.push(r.method()); });
   await page.reload();
-  await expect(panel.getByRole('heading', { name: '已接受', exact: true })).toBeVisible();
   await expect(page.getByRole('article', { name: '学习包详情' })).toContainText('内容版本已过期');
+  await page.getByRole('button', { name: '图谱管理', exact: true }).click();
+  await expect(panel.getByRole('heading', { name: '已接受', exact: true })).toBeVisible();
   expect(writes).toEqual([]);
   for (const width of [375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
@@ -88,16 +95,17 @@ test('P1: generated proposal stays pending, accepts atomically, preserves read-o
 test('P1: teaching tool creates reviewable proposal; rejection does not change graph or scores', async ({ page, request }) => {
   const goal = await learningGoal(request);
   const before = await (await request.get(`/api/goals/${goal}`)).json();
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
   await page.getByLabel('向当前节点提问').fill('请提出一个路线调整提案，只提出建议，不接受。');
   await page.getByRole('button', { name: '发送问题' }).click();
-  await expect(page.locator('.assistant-message').last()).toContainText('propose_graph_change');
+  await expect(page.locator('.wb-conversation > .run-status')).toContainText('propose_graph_change');
+  await page.getByRole('button', { name: '图谱管理', exact: true }).click();
   const panel = page.getByRole('region', { name: '路线调整提案' });
   await expect(panel.getByRole('heading', { name: '待审核', exact: true })).toBeVisible();
   await panel.getByRole('button', { name: '拒绝提案' }).click();
   await expect(panel.getByRole('heading', { name: '已拒绝', exact: true })).toBeVisible();
   expect((await (await request.get(`/api/goals/${goal}`)).json()).graph).toEqual(before.graph);
-  await expect(page.locator('.progress-card')).toContainText('0 个有效样本');
+  expect((await (await request.get(`/api/goals/${goal}/nodes/n/context`)).json()).node.sample_count).toBe(0);
   expect((await (await request.get(`/api/goals/${goal}/graph-proposals`)).json()).proposals[0].status).toBe('rejected');
 });
 
@@ -112,7 +120,8 @@ test('P1: stale pending proposal persists conflicted rather than overwriting a n
     } });
     expect(result.status()).toBe(201); proposals.push((await result.json()).id);
   }
-  await page.goto(`/goals/${goal}/learn`);
+  await openLearning(page, request, goal);
+  await page.getByRole('button', { name: '图谱管理', exact: true }).click();
   const first = page.getByRole('article', { name: `提案 ${proposals[0]}`, exact: true });
   page.once('dialog', dialog => dialog.accept());
   await first.getByRole('button', { name: '接受提案并发布' }).click();

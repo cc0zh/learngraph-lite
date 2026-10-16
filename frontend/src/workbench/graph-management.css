@@ -1,0 +1,14 @@
+.graph-management { display: grid; gap: 16px; min-width: 0; }
+.graph-management > .section-title { margin-bottom: 0; }
+.graph-management .panel { min-width: 0; }
+.graph-management .two-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.graph-management .node-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.graph-management .node-chips button { max-width: 100%; overflow-wrap: anywhere; }
+.graph-management .publish-bar { flex-wrap: wrap; gap: 12px; }
+.graph-management .publish-bar > span { flex: 1 1 220px; }
+.graph-management .prerequisite-options label { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .graph-management .two-cols { grid-template-columns: minmax(0, 1fr); }
+  .graph-management .section-title { flex-wrap: wrap; gap: 10px; }
+  .graph-management .publish-bar > button { width: 100%; }
+}

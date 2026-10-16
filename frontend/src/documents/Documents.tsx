@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { documentError, documentPath, documentRequest } from './http';
-import { DocumentError, DocumentStatus, PAGE_SIZE, Pagination, parsing } from './shared';
+import { documentError, documentHref, documentPath, documentRequest } from './http';
+import { DocumentError, DocumentLink, DocumentStatus, PAGE_SIZE, Pagination, parsing } from './shared';
 import type { DocumentPage, PublicDocument } from './types';
 import './documents.css';
 
-export function Documents() {
+export function Documents({ onChanged }: { onChanged?: () => void }) {
   const [page, setPage] = useState<DocumentPage>();
   const [offset, setOffset] = useState(0);
   const [refresh, setRefresh] = useState(0);
@@ -16,6 +16,7 @@ export function Documents() {
   const [uploaded, setUploaded] = useState<PublicDocument>();
   const input = useRef<HTMLInputElement>(null);
   const pagePending = page?.documents.some(parsing) || (uploaded && parsing(uploaded));
+  useEffect(() => { if (uploaded) onChanged?.(); }, [uploaded?.document_id, uploaded?.status, onChanged]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError('');
@@ -51,22 +52,22 @@ export function Documents() {
     } catch (e) { setError(documentError(e)); }
     finally { setBusy(false); }
   }
-  return <div className="page documents-scope"><header className="doc-heading"><div><p className="eyebrow">你的资料，保留可校验的原文</p><h1>我的资料</h1></div><a href="/">返回我的学习</a></header>
+  return <section className="documents-scope documents-tool" aria-label="资料管理"><header className="doc-heading"><div><p className="eyebrow">你的资料，保留可校验的原文</p><h1>我的资料</h1></div></header>
     <section className="doc-panel"><h2>上传学习资料</h2><p className="doc-muted">支持 UTF-8 TXT / Markdown 和含文本的 PDF；每个文件最多 10 MB、20 万字符，PDF 最多 100 页。不自动 OCR，不执行原文 HTML。</p>
       <form onSubmit={upload}><label>选择资料文件<input ref={input} type="file" accept=".txt,.md,.markdown,.pdf" disabled={busy} onChange={e => setFile(e.target.files?.[0])}/></label>
         <div className="doc-actions"><button disabled={!file || busy}>{busy ? '正在上传…' : '上传资料'}</button><button type="button" className="quiet" disabled={loading || busy} onClick={() => setRefresh(n => n + 1)}>刷新资料列表</button></div></form>
-      {uploaded && <p role="status">已保存到服务器：<a href={documentPath(uploaded.document_id)}>{uploaded.filename}</a>。可进入原文页查看解析与绑定。</p>}
+      {uploaded && <p role="status">已保存到服务器：<DocumentLink href={documentHref(uploaded.document_id)}>{uploaded.filename}</DocumentLink>。可查看原文、解析与绑定。</p>}
     </section>
     <DocumentError error={error}/>
     <section className="doc-list" aria-label="资料列表" aria-busy={loading}>
       {loading && <p role="status">正在读取资料…</p>}
       {!loading && !error && page?.total === 0 && <div className="doc-empty"><h2>还没有资料</h2><p>上传后显式绑定到学习目标，再为需要的节点单独绑定。</p></div>}
       {page?.documents.map(document => <article className="doc-panel" key={document.document_id}>
-        <h2><a href={documentPath(document.document_id)}>{document.filename}</a></h2><DocumentStatus document={document}/>
+        <h2><DocumentLink href={documentHref(document.document_id)}>{document.filename}</DocumentLink></h2><DocumentStatus document={document}/>
         <p className="doc-muted">{(document.size_bytes / 1024).toFixed(1)} KB · 版本 {document.revision} · {document.kind || '未知格式'}</p>
-        <a href={documentPath(document.document_id)}>查看原文与绑定 →</a>
+        <DocumentLink href={documentHref(document.document_id)}>查看原文与绑定 →</DocumentLink>
       </article>)}
     </section>
     {page && <Pagination offset={offset} total={page.total} label="资料" busy={loading || busy} onChange={setOffset}/>}
-  </div>;
+  </section>;
 }

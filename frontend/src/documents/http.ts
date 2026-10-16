@@ -1,4 +1,5 @@
 import { HttpError } from '../api';
+import { workbenchHref } from '../workbench/navigation';
 
 // Only the local API is allowed. FormData must retain the browser's multipart boundary.
 export async function documentRequest<T>(path: string, options: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
@@ -31,9 +32,12 @@ export function documentError(error: unknown): string {
 }
 
 export const documentPath = (id: string) => `/documents/${encodeURIComponent(id)}`;
+export function documentHref(id: string, goalId?: string, nodeId?: string) {
+  return workbenchHref({
+    tool: 'document', document: id, chunk: undefined,
+    ...(goalId === undefined ? {} : { source_goal: goalId, source_node: nodeId }),
+  });
+}
 export function chunkLink(documentId: string, chunkId: string, goalId?: string, nodeId?: string) {
-  const query = new URLSearchParams({ chunk: chunkId });
-  if (goalId) query.set('goal', goalId);
-  if (nodeId) query.set('node', nodeId);
-  return `${documentPath(documentId)}?${query}`;
+  return workbenchHref({ tool: 'document', document: documentId, chunk: chunkId, source_goal: goalId, source_node: nodeId });
 }

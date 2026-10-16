@@ -1,26 +1,45 @@
-# 阶段总结与真实测试
+# 测试与阶段验收指南
 
 ## P0/P1 产品体验与验收
 
-当前P0/P1产品体验及一次真实Chromium P0全旅程通过。离线回归：139 Python、19 Node、web build、34 fixture/mock E2E、20/20评估与仓库检查通过。分阶段历史、审查修复、唯一真实证据和剩余边界维护在[执行计划](../exec-plans/active/learngraph-lite-implementation.md)文首。
+当前状态、测试数量和最近证据只维护在[质量与验收](../QUALITY_SCORE.md)；本文负责复现步骤，不累加历史计数。唯一 `/` 是学习工作台，资料和图谱管理在主区通过 `tool` 切换；旧页面地址只读兼容跳转，不保留固定问卷。
 
-2026-10-14 DeepSeek/deepseek-flash协议/P0 HTTP已通过；本轮新增真实浏览器从首页输入点击旅程，6调用、13317 tokens、刷新0 POST。脱敏报告/截图/独立库留`.local`不提交。未执行P1真实内容质量、真实异常/取消/重试及20例真实评估，不标记M5完成。
+付费浏览器脚本已迁移到默认工作台创建/审核/节点/作答推荐，但本次未执行真实调用；HTTP smoke 验证直接澄清/图谱 API。脚本存在不等于当前工作台、规划 Agent 和 Skill 的真实质量已验收。2026-10-14 的历史真实结果不能代替当前版本复验，P1 真实语义质量、20 例真实评估和 M5 交接仍未完成。
 
-React资料原文/引用、学习包四类组件/ACK/解释、持久提案HTTP/UI已实现并有fixture验收；M5真实评估和最终交接未完成。本轮变更继续记录在[history](../histories/2026-10/20261013-2115-react-p0.md)。
+## 离线回归（默认不收费）
+
+在仓库根目录按 [README](../../README.md) 准备 Node/Python/uv，再执行：
+
+```powershell
+npm.cmd ci
+uv sync --locked --group dev
+npx.cmd playwright install chromium
+npm.cmd run check
+npm.cmd run test:e2e
+npm.cmd run eval:offline
+```
+
+Windows 使用 `.cmd`；macOS/Linux 使用 `npm`、`npx`，Linux CI 安装浏览器时用 `npx playwright install --with-deps chromium`。浏览器安装需要下载，但 fixture/mock 测试本身不请求模型供应商。
+
+- `check` = `ci` + 前端构建；`ci` 包含文档骨架/本地 Markdown 链接、仓库/Action/Python import 检查、Python 与 Node 测试，不含浏览器和离线评估。Python 使用仓库自带测试加载器，未依赖 pytest。
+- `test:e2e` 启动独立业务 fixture API/Vite，拒绝复用已运行服务；默认端口 8000/5173、数据库 `.local/e2e.sqlite3`，不会连接 real。若日常开发服务占端口，先停止它，或同时指定 `LEARNGRAPH_E2E_API_PORT`、`LEARNGRAPH_E2E_WEB_PORT` 和独立 `LEARNGRAPH_E2E_DATABASE_PATH`。
+- 列举用例使用 `npm.cmd run test:e2e -- --list`；定向回归如 `npm.cmd run test:e2e -- --grep "workbench:"`。不要同时运行两套使用相同端口/数据库的 E2E。
+- 规划对话、高级图谱管理和节点对话全部在工作台验证；旧路由只测只读定位及历史兼容。迁移固定问卷用例到直接目标表单，保留版本/dirty/恢复约束；fixture 测链路，mock 专测异常协议，真实模型内容另评估。
+- 文档门禁不访问外链、不验证章节锚点，也不证明内容一致；仍需人工核对。完整流水线范围见 [CI/CD](../CICD.md)。
 
 ## 可测试的能力与边界
 
 | 范围 | 当前状态 |
 | --- | --- |
 | 独立 Agent 内核 | 原生工具回合、严格参数、六次共享模型调用/八步/十二次工具调用；12,000 估算输入 token 上限与 120 秒协作 deadline 已具备，无硬中断/独立 tool timeout/完整累计 token 预算 |
-| 目标与图谱 | 目标确认、最多两轮澄清、资料型草稿生成、人工编辑和发布 HTTP |
+| 目标与图谱 | 默认原生工具规划对话、动态问题/目标/路线卡、结构化答复与差异；确定性确认/发布；兼容原最多两轮直接澄清与手动编辑 |
 | 节点学习 | 上下文、资料问答、引用定位、练习生成/作答、掌握度与下一步推荐 |
 | 资料 | React列表/上传/解析状态/显式目标与节点绑定/分页纯文本原文/引用；TXT/Markdown/文本PDF、FTS5，无OCR |
 | 学习包 | 四类固定组件、已有公共题卡、版本/历史反馈、ACK与解释独立会话；恢复event/slot/request，ACK不改成绩；真实内容质量未验收 |
-| SQLite | planning/document/learning/lesson/run/proposal可重开，未完成run转interrupted；提案接受规划/学习/状态同事务，初次publish仍两写 |
-| 浏览器验收 | 默认34 fixture/mock用例含P0/P1旅程、恢复与版本边界，375–1440响应式（学习包额外320）；另1条opt-in真实Chromium P0完整UI旅程 |
+| SQLite | planning/document/learning/lesson/run/proposal/conversation可重开，未完成run转interrupted；提案接受规划/学习/状态同事务，初次publish仍两写 |
+| 浏览器验收 | fixture/mock 用例含统一工作台、P0/P1旅程、恢复与版本边界，375–1440响应式（学习包额外320）；另有历史 opt-in 真实 Chromium P0旅程，不覆盖新工作台 |
 
-模型协议测试使用 MockTransport，失败/重试与部分浏览器边界使用 mock DTO，浏览器主闭环使用 fixture；这些离线证据不代表真实供应商兼容、生成质量或引用语义支持。新增回归覆盖未送达/响应丢失、同 ID 恢复、查询门禁、旧历史竞态、422/409解锁、超长节点和 dirty 编辑；真实验证另列，不混算到34个离线E2E。
+模型协议测试使用 MockTransport，失败/重试与部分浏览器边界使用 mock DTO，浏览器主闭环使用 fixture；这些离线证据不代表真实供应商兼容、生成质量或引用语义支持。回归覆盖未送达/响应丢失、同 ID 恢复、查询门禁、旧历史竞态、422/409解锁、超长节点和 dirty 编辑；真实验证与离线 E2E 分开记录。
 
 ## 先启动业务 UI（无需 Key）
 
@@ -32,7 +51,7 @@ React资料原文/引用、学习包四类组件/ACK/解释、持久提案HTTP/U
 
 ## 先验证供应商和资料问答
 
-使用支持 Chat Completions、function tool calling 和 max_tokens 的模型。配置只放当前终端环境变量；脚本使用真实请求，可能产生费用。
+使用支持 Chat Completions、function tool calling 和 max_tokens 的模型。配置可放当前终端环境变量或根 `.env`，前者优先，不提交密钥；详情见 [API 手册](../api-guide.md)。下面每条命令都会发起真实请求，可能产生费用，应按需要单独选择，而不是作为默认回归整段执行。
 
 ```powershell
 $env:MODEL_API_KEY = '<你的 API Key>'
@@ -56,7 +75,7 @@ $env:LEARNGRAPH_DATABASE_PATH = '.local/stage-review.sqlite3'
 npm.cmd run dev:api:real
 ```
 
-这个初始化命令不调用供应商。浏览器打开 http://127.0.0.1:8000/docs；fixture API 的 dev:api 仅演示run协议，不能替代这个业务入口。也可按[README](../../README.md)创建自己的目标、生成并审核图谱、发布、上传并绑定真实资料。用自己的资料更能检验学习价值。
+这个初始化命令不调用供应商。浏览器打开 <http://127.0.0.1:8000/docs>；fixture API 的 dev:api 仅演示run协议，不能替代这个业务入口。也可按[README](../../README.md)使用工作台创建目标，或按 [API 手册](../api-guide.md)生成、审核并发布图谱、上传并绑定真实资料。只使用获授权的非敏感样例，不能把日常资料默认发给供应商。
 
 另开终端，生成不带题卡的学习包：
 

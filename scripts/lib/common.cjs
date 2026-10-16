@@ -7,11 +7,15 @@ const { spawnSync } = require('node:child_process');
 const repoRoot = path.resolve(__dirname, '../..');
 const excludedNames = new Set([
   '.git', 'node_modules', 'dist', '.tmp', 'tmp', 'temp', 'coverage',
-  '.venv', 'venv', '.cache', '.npm', '.env', '.env.local',
+  '.venv', 'venv', '.cache', '.npm', 'build', '__pycache__', 'test-results', 'playwright-report',
+  '.temp',
+  '.env', '.npmrc', '.pypirc', '.netrc', '.aws', '.ssh',
 ]);
 
 function excluded(name) {
-  return excludedNames.has(name) || /^\.env\..+\.local$/.test(name);
+  return excludedNames.has(name) || /^\.env\./i.test(name)
+    || /(?:^\.local(?:[.-]|$)|\.local(?:\.|$))/i.test(name)
+    || /\.(?:py[co]|pem|key|p12|pfx)$/i.test(name);
 }
 
 function stat(file) {

@@ -42,9 +42,15 @@ export function useRuns(session: string, onComplete: () => void) {
   useEffect(() => {
     if (!activeId) return;
     const source = new EventSource(`/api/runs/${activeId}/events`);
-    const update = (patch: Partial<Run>) => setRuns(list => list.map(r => r.run_id === activeId ? { ...r, ...patch } : r));
+    const update = (patch: Partial<Run>) => setRuns(list => list.map(r => {
+      if (r.run_id !== activeId) return r;
+      // A late snapshot/detail read must not turn a terminal run active again.
+      if (terminal(r.status) && patch.status && !terminal(patch.status)) return r;
+      return { ...r, ...patch };
+    }));
     const snapshot = (event: MessageEvent) => {
       const run = JSON.parse(event.data).payload as Run;
+      ++queryVersion.current;
       if (!pendingRef.current) setError('');
       update(run);
       if (terminal(run.status)) { source.close(); notifyTerminal([run]); }
@@ -59,12 +65,13 @@ export function useRuns(session: string, onComplete: () => void) {
       setRuns(list => list.map(r => r.run_id === activeId ? { ...r, tool_activity: { ...r.tool_activity,
         [item.call_id]: { ...r.tool_activity[item.call_id], ...item, status: item.status || 'running' } } } : r));
     });
-    source.addEventListener('run.started', () => update({ status: 'running' }));
+    source.addEventListener('run.started', () => { ++queryVersion.current; update({ status: 'running' }); });
     for (const status of ['completed', 'failed', 'cancelled', 'budget_exceeded', 'interrupted']) source.addEventListener(`run.${status}`, async event => {
       source.close();
       // Terminal SSE already carries saved public text/output/usage. A failed GET
       // must not leave the browser locked in running or omit artifact refresh.
       const payload = JSON.parse((event as MessageEvent).data).payload as Partial<Run>;
+      ++queryVersion.current;
       update({ ...payload, status }); notifyTerminal([{ run_id: activeId, status }]);
       try { update(await api<Run>(`/runs/${activeId}`)); }
       catch (e) { setError(`终态已收到，详细结果暂未读取：${String(e)}。可查询运行状态。`); }
@@ -88,7 +95,7 @@ export function useRuns(session: string, onComplete: () => void) {
       if (terminal(run.status)) notifyTerminal([run]);
       return true;
     } catch (e) {
-      if (e instanceof HttpError && e.status >= 400 && e.status < 500) {
+      if (e instanceof HttpError && e.status >= 400 && e.status < 500 && e.status !== 429) {
         localStorage.removeItem(`${key}:pending`); pendingRef.current = undefined; setPending(undefined); setPendingChecked(false);
         await refresh(); setError(`请求被拒绝：${e.message}。请检查输入后重新发起。`);
         return false;

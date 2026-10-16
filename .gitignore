@@ -51,3 +51,8 @@ venv/
 # Browser verification output
 playwright-report/
 test-results/
+
+# VitePress generated cache and temporary bundles
+docs/.vitepress/cache/
+docs/.vitepress/.temp/
+docs/.vitepress/.cache/

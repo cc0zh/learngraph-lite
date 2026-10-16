@@ -40,10 +40,11 @@ def setup_goal(database: Path, goal_id: str = "g1", *, start_learning: bool = Tr
 
 
 class ReadingModel:
-    def __init__(self, *, barrier=None, repair_scope=False, with_documents=False):
+    def __init__(self, *, barrier=None, repair_scope=False, with_documents=False, with_skills=False):
         self.barrier = barrier
         self.repair_scope = repair_scope
         self.with_documents = with_documents
+        self.with_skills = with_skills
         self.closed = False
         self.transcripts = []
 
@@ -55,6 +56,8 @@ class ReadingModel:
         expected = {"get_learning_context", "get_next_action"}
         if self.with_documents:
             expected |= {"search_documents", "read_document_chunk"}
+        if self.with_skills:
+            expected.add("read_skill")
         assert names == expected
         for tool in tools:
             schema = tool["function"]["parameters"]
@@ -197,7 +200,7 @@ def test_real_http_factory_shares_learning_reads_and_maps_scope_errors():
         database = Path(directory) / "test.sqlite3"
         planning, learning = setup_goal(database)
         context = LearningContext(planning, learning)
-        model = ReadingModel(with_documents=True)
+        model = ReadingModel(with_documents=True, with_skills=True)
         with patch("learngraph_lite.bootstrap.build_real_gateway", return_value=model):
             app = create_real_app(database=database)
         with TestClient(app, base_url="http://localhost") as api:

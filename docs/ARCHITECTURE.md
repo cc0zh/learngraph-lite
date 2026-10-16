@@ -1,8 +1,26 @@
 # 架构总览
 
-LearnGraph Lite是本地单用户学习Agent Web应用。React P0/P1已接通：目标/图谱、节点教学/练习/推荐、资料/引用、固定组件学习包/ACK/解释、图谱提案/人工审核。planning/document/learning/lesson/run/proposal持久化支持恢复；提案接受原子迁移规划与学习版本。139 Python、19 Node、web build、34 fixture/mock E2E、20/20离线评估通过；真实P0 HTTP及一次从首页开始的真实Chromium浏览器旅程通过，事实见执行计划文首。P1真实质量、20例真实评估和M5最终交接未完成。
+LearnGraph Lite是本地单用户学习Agent Web应用。React P0/P1及统一图谱工作台已接通：目标/图谱、独立会话、节点教学/练习/推荐、资料/引用、固定组件学习包/ACK/解释、图谱提案/人工审核。SQLite支持业务与运行恢复；提案接受原子迁移规划与学习版本。最新离线验收与工作台边界见下节；历史真实P0 HTTP/浏览器证据早于工作台改动，不能代替新流程真实质量验收。P1真实质量、20例真实评估和M5最终交接未完成。
 
-正式规格以 docs/从零构建功能文档.md 为准。本文记录当前实现边界，避免把目录名误当作架构完成。
+产品要求与原始实施建议见[产品规格](从零构建功能文档.md)；本文记录当前采用的实现与差异，避免把目录名或设计建议误当作架构完成。实际 API/操作维护在 [API 手册](api-guide.md)，恢复手册见 [RELIABILITY.md](RELIABILITY.md)，当前验证状态只维护在[质量与验收](QUALITY_SCORE.md)。
+
+## 统一图谱学习工作台
+
+唯一业务界面 `/` 使用 `frontend/src/workbench/`：左侧图谱/会话目录，中间规划对话或独立节点聊天与学习内容标签，右侧图谱/浏览节点。资料列表/原文与图谱管理以 `tool=documents|document|graph` 在同一工作台主区打开，返回保留 `goal/session`。`navigation.ts` 区分 UI query 与 API 路径，原文 `document/chunk`、绑定 `source_goal/source_node` 独立于聊天范围；资料选择不能改写会话焦点。
+
+会话元数据是作用域事实，不能被第二个 URL 参数或临时浏览节点覆盖。旧 `/library`、`/goals/:id/plan|learn`、`/documents[/:id]` 只在启动时只读归一化到工作台，不保留旧页面、固定问卷或自动创建替代会话。旧学习链接优先恢复本浏览器已选节点对应的既有 session；无记录时只浏览图谱，历史会话仍可从目录继续。业务 API、持久模型和历史数据未删除。
+
+`GraphManagement` 承载直接目标表单、显式生成/反馈修订、节点/前置编辑、发布和 `ProposalPanel`；已发布图谱不能直接编辑。保存使用编辑起点 version，读到新版本保留本地输入但禁止覆盖；未保存编辑离开工具须确认。`Conversation` 在作答后读取确定性 next-action，展示练习熟练标准与推荐，查看推荐只浏览节点，不调用模型。
+
+`ConversationService` 组合独立 SQLite 会话元数据、规划目录与旧运行只读发现；目录只归集普通 runner/teaching，不把教材/解释/提案当独立聊天。每个目标派生 `planning:{goal_id}`；learning/general 可在尚无 run 时持久存在。创建要求客户端 UUID，指纹相同幂等，变化则409。受管理会话所有 run 写入在入队前检查不可变 goal/node，普通会话不能发起教学；底层未注入目录的装配保留兼容行为。单数据库仍只支持一个 API 进程。
+
+工作台目标创建使用 `POST /api/workbench/goals`：目标与首次 title 指纹在同一个 `BEGIN IMMEDIATE` 中保存；同 ID 同输入返回最新规划，旧入口已占用该 ID 或指纹变化返回409，不把新规划写入放入该事务。客户端在 POST 前保存创建身份、首轮 request_id；元数据确认后转交既有 run 恢复机制。刷新仅查询；待恢复目标不能从 fallback 发起另一首轮。429 保留原命令，确定性拒绝至少保留完整草稿，迟到成功不能清空新草稿。
+
+界面统一但 transcript 不合并：旧 runner 续聊沿用 runner，新节点会话用 teaching。节点题目、成绩、教材仍由原仓库共享；学习包生成/解释使用按 conversation 持久的子 session。解释结果与来源相邻，步骤事件可共享，但其初始 slot 每条会话独立，避免服务端 `(goal,event,slot)` 幂等键跨会话冲突。未引入跨会话长期记忆。
+
+规划提示词和共享 goal-planning Skill 优先组织主题范围与知识结构，不强制成果/预算；嵌入审核按知识节点展示，不默认按投入和阶段排任务。领域仍为小型、无环 prerequisite 图，没有新增 hierarchy/related 关系或自动扩展已发布图谱。实现决策见[工作台计划](exec-plans/completed/unified-learning-workbench.md)，当前测试数量不在此重复维护。
+
+规划工具 `generate_route_draft` 的附加文字按服务端当前图谱状态分流：没有草稿时作为 `initial_guidance` 传给生成器，有草稿时才是 `feedback`，并附上当前图谱；模型填入非空 feedback 不能把首次创建误判为修订，也不能丢弃其范围要求。兼容直接 `/graph-drafts` 的修改反馈仍要求已有草稿，确认、版本和 published 保护不变。决策见[变更记录](histories/2026-10/20261016-1338-initial-graph-guidance.md)。
 
 ## 顶层结构
 
@@ -26,7 +44,7 @@ React 的未确认 POST 输入以原 request_id 保存到 localStorage，刷新�
     infrastructure -> application/domain/agent_core 的端口或协议
     bootstrap -> presentation/application/infrastructure
 
-当前SQLite边界覆盖planning/document/learning/lesson/run/proposal。React复用业务API，所有模型调用在写事务外；提案接受是跨聚合同事务，初次publish/ensure_goal仍两写。完整版本仓库与迁移平台未实现。
+当前 SQLite 边界覆盖 planning/document/learning/lesson/run/proposal/conversation。React 复用业务 API，所有模型调用在写事务外；各写入的一致性边界见下文与[恢复手册](RELIABILITY.md)，不能概括为所有业务都已跨聚合原子化。
 
 当前离线检查覆盖：
 
@@ -46,7 +64,7 @@ M1 fixture smoke 使用 python -m learngraph_lite.bootstrap：bootstrap 装配 f
 
 `LearningContext` 复用 planning repository 与 `LearningService`，要求已确认目标、已发布图谱、合法节点以及与学习状态完全一致的图谱快照。场景先按“版本化 system 指令 → JSON 业务数据 → 当前用户输入”装配；Loop 在当前输入之前插入同 session、同 mode 的 completed 回合协议历史，保留 user/assistant/tool 和 assistant tool_calls/tool_call_id 配对。最近八条运行记录是候选窗口，失败/取消/未完成与不同 mode 不纳入历史；输入超限时按完整用户回合裁剪，保留必要业务上下文和当前任务，不是无限长期记忆。上下文仅投影当前节点、直接前置依赖和计分后的表现，不包含练习私有答案。`get_learning_context` / `get_next_action` 闭包绑定本次目标/节点，Pydantic schema 不暴露作用域参数；推荐调用领域规则，模型不能写成绩或重定义推荐算法。每次调用检查当前发布状态与版本，过期工具错误回注模型；不自动重置或迁移成绩。
 
-HTTP context/next-action复用应用用例，同步SQLite读取不占用ASGI事件循环。只读规划/学习仍分别读取，并发版本变化时明确拒绝而不重置；提案接受同事务更新两份状态，初次发布初始化仍两写。`scripts/run-learning-agent-demo.py`复现fixture工具回合，拒绝覆盖已有库；该脚本的可选真实资料问答本轮未执行。
+HTTP context/next-action复用应用用例，同步SQLite读取不占用ASGI事件循环。只读规划/学习仍分别读取，并发版本变化时明确拒绝而不重置。`scripts/run-learning-agent-demo.py`复现fixture工具回合，拒绝覆盖已有库；可选真实资料问答需单独验收。
 
 `DocumentTurn` 按本轮目标/节点注册 `search_documents` / `read_document_chunk`，复用 DocumentService 和 SQLite FTS5。检索最多返回 5 个片段，服务端分配本轮稳定 C1 等编号；读取只能使用已发出的编号。资料是数据，不是指令。完成时扫描 `[C1]` 等标记，校验绑定、文档版本、片段内容摘要值与引用位置，生成来源表、cited/status 和未验证编号；不校验回答是否被原文语义支持。旧同版本覆盖可被检测，完整资料版本管理仍待实现。
 
@@ -64,11 +82,17 @@ Uvicorn 先等待 HTTP/SSE 连接结束才触发 lifespan shutdown，本地启�
 
 运行准入使用 `BEGIN IMMEDIATE` 保存请求/queued记录；状态更新与新增一个递增事件也同事务提交，成功后才更新内存并唤醒订阅者。终态持久失败时 live 状态为 interrupted，停止新准入，保留 durable 的上一状态；该失败通知只在内存中，修复存储后重启会持久化 interrupted。不会把未保存的完成结果报告为成功。显式 retry 创建新 attempt、保留 root 与完整初始输入；持久生成 operation 使练习/学习包产物在重试时可复用。所有模型调用在事务外；后续节点回合可从已完成运行恢复协议历史，但启动恢复不会继续执行旧模型流或未完成任务。
 
-## 资料导入与解析
+## 共享 Skill
+
+交互 Agent 已接入共享 Skill，详见[技能说明](agent-skills.md)：应用层 `SkillTurn` 过滤模式、构造摘要、注册 read_skill 并记录使用元数据；基础设施 `FileSkillCatalog` 安全解析可信仓库目录并固定启动快照。技能不新增工具权限，agent_core 不认识技能目录。`PreparedRun.prepare_history` 将旧技能工具正文替换为历史提示而保留协议配对；历史持久记录不被改写。显式技能只从本轮用户聊天输入识别，学习包事件解释的合成输入不触发；内层生成用例不自动继承技能。官方 real/业务 fixture factory 装配，独立 echo fixture 和未注入 catalog 的底层用例保持独立。
+
+## 图谱提案与前端恢复
 
 `GraphProposalService`依赖注入`ProposalCoordinator`，`SQLiteProposalRepository`在一个`BEGIN IMMEDIATE`连接读取/更新planning、learning、proposal及操作去重。生成/repair在事务外，模型只创建pending；严格四操作和base revision接受审核，conflicted提交后再返回409。接受显式迁移全局内容版本，保留题目/attempt/package历史；metadata只改计划revision。该事务不等于初次publish或所有资料/生成提交都已跨聚合原子化。
 
 React恢复分层：公共终态SSE先应用已保存payload，后续GET失败不遗留running；history查询发现新终态触发一次产物刷新。学习包GET使用epoch，选择与loading/error不能被旧请求覆盖；稳定event/slot/request恢复与显式新slot分开。提案接受响应丢失通过只读图谱/列表同步，不猜测写入未执行或自动重发决定。
+
+## 资料导入与解析
 
 `DocumentImports` 在应用层检查文件大小、生成 UUID、保存原 bytes 并投递任务；两条解析线程、四个活动/排队名额，上传不调用 AgentLoop 或模型。`SubprocessDocumentParser` 在独立 Python 子进程中使用 pypdf 或严格 UTF-8/BOM 解码，20 秒超时由 subprocess.run 终止并回收。HTTP lifespan 等待导入线程关闭，单次解析受超时约束。
 
@@ -78,15 +102,21 @@ Markdown 按 ATX 标题切块并忽略代码围栏，PDF 按显式页码标记�
 
 上传 HTTP 仅接收 multipart bytes；绑定/搜索在应用层检查目标/节点存在。SQLite 绑定校验和写入持有同一写事务；React documents模块支持上传/list/轮询/显式绑定/分页纯文本原文和产物引用；卸载停止读取，刷新只GET，删除/解绑明确确认。
 
-`BudgetedModelGateway` 位于通用内核，为一次 run 的所有模型请求计数并累积 usage。Runner 复用同一包装器，教学工具和直接生成用例使用父 run 的 gateway；包装器禁止切换预算，避免重复计数。默认模型调用上限六次，JSON 修复最多一次且计入次数。已有每次调用 12,000 估算输入 token 上限（消息与工具 schema 的 UTF-8 bytes/3）和 120 秒协作 deadline。超限时删除最旧完整用户回合，必要上下文仍超限则拒绝调用；usage 只做汇总，不是累计 token 硬上限。deadline 在步骤/模型/工具准入与调用后、流式增量检查点生效，不能硬中断阻塞调用；尚无独立 tool timeout 或完整累计输入/输出 token 预算。供应商 SDK 网络 timeout 不等于整个 run 的硬截止时间。
+## 共享预算与结构化生成
+
+`BudgetedModelGateway` 位于通用内核，为一次 run 的所有模型请求计数并累积 usage。Runner 复用同一包装器，教学工具和直接生成用例使用父 run 的 gateway；包装器禁止切换预算，避免重复计数。JSON 修复最多一次且计入次数，输入超限按最旧完整用户回合裁剪。预算数值与取消/超时的操作边界集中见[恢复手册](RELIABILITY.md)，不能把 usage 汇总或 SDK timeout 当作硬预算。
 
 `GenerateExercise` 位于 application：请求结构化候选，经严格 schema 和现有领域规则校验，生成服务端题目 ID，再通过 learning repository `mutate` 原子保存整批私有题目和 operation。模型调用在事务外，保存前重读规划版本，事务内检查最新学习图谱、取消和重复题。SQLite 使用 `BEGIN IMMEDIATE` 与 `learning_generation_operations` 的 `(goal_id, operation_key)` 主键；首次作答和 submission 去重也在同一学习事务完成。planning/learning 分别读取仍留下并发规划变更的窄窗口，后续需统一同步协议。
 
 按钮 `mode=exercise` 走 Loop direct handler；教学 `mode=teaching` 注册闭包绑定节点的 `create_exercise`，调用相同用例。operation key 使用 root task、操作类型、节点、内容版本和固定 purpose slot；count/purpose 属于 fingerprint，同键不同参数冲突。失败任务显式 retry 创建新 run 并保留 root；新任务创建新 root。私有候选及修复对话不回注教学 transcript，ToolResult/公共 DTO 只含公共题目及其来源表，提交反馈才返回答案。每题和回答的 C1 独立，题目来源不能并入回答表；生成 registry 与 real API 的 root/run 均可重读恢复。
 
-`GeneratePlanning` 复用 Loop direct handler、共享 BudgetedModelGateway 与严格 Pydantic 候选。澄清只对缺失且未主动跳过的字段提问，最多两轮；图谱默认十节点，包含必要性/顺序解释、可验证成果与优先级，校验依赖和环，只保存 draft。`graph_feedback` 保存为 run 输入并参与去重/重试，当前草稿与用户反馈作为业务数据进入模型上下文，不能自动发布。模型调用在事务外，提交通过 planning repository `mutate` 在锁内或 SQLite `BEGIN IMMEDIATE` 中核对 expected_version、业务状态与取消；成功递增 version，失败回滚。run 输出取本次保存的快照，避免再次读取混入后续编辑。
+兼容直接 clarify/graph 入口的 `GeneratePlanning` 复用 Loop direct handler、共享 BudgetedModelGateway 与严格 Pydantic 候选。旧澄清只对缺失且未主动跳过的字段提问，最多两轮；直接图谱入口默认十节点（规划 Agent 则自行选择 1–30），校验依赖和环，只保存 draft。`graph_feedback` 保存为 run 输入并参与去重/重试，当前草稿与用户反馈作为业务数据进入模型上下文，不能自动发布。模型调用在事务外，提交通过 planning repository `mutate` 在锁内或 SQLite `BEGIN IMMEDIATE` 中核对 expected_version、业务状态与取消；成功递增 version，失败回滚。run 输出取本次保存的快照，避免再次读取混入后续编辑。
 
-React 规划默认使用三个有界引导问题和可编辑摘要；confirm API 可在一个 mutate 中合并摘要并明确确认，不要求先 PATCH 再确认。跳过字段独立保存在 GoalDraft JSON，填写后清除；assumptions 是派生说明，SQLite 读取重建以避免旧“有能力/四周”假设进入生成上下文。自述基础始终未验证，不修改学习掌握状态。路线阶段用稳定拓扑排序投影现有节点、显示总投入与实践验证建议；图谱/优先级/依赖编辑放入可选高级区。读取请求序号和目标/图谱独立 dirty 保护继续生效；确认响应丢失时，仅在读到与本地输入完全相同的已确认摘要后解除目标门禁，不再次提交确认。增量验收见[引导式规划计划](exec-plans/completed/guided-planning.md)。
+React 规划默认由专用规划 Agent 驱动连续对话；直接目标表单及高级图谱编辑在工作台“图谱管理”，不再保留固定三题向导。目标级 `mode=planning` 与兼容 clarify/graph API 共用 `planning:{goal_id}` 串行会话；通过 PreparedRun 装配独立 Runner、当前领域快照与当前用户输入，复用有限 completed 协议历史、预算和 SSE。工具仅能读取、发问、提出目标草稿或生成路线草稿，没有确认/发布能力。发问与目标审核通过通用工具结束轮次语义由宿主强制停止，补齐同批未执行工具的协议结果，不把等待状态交给提示词保障。
+
+动态问题、目标/路线审核卡及程序计算的图谱差异保存在 `output.planning_agent`。结构化答案引用原 run 与问题 ID，后端核对目标、版本和跳过/自定义值；旧卡不能静默覆盖当前方案。UI 以对话为主线，当前目标/路线作为可审核产物；用户点“确认目标并生成图谱”先调用确定性 confirm，再显式授权下一轮规划请求。挂载与刷新只 GET，确认丢失不自动重发、继续请求丢失沿用同 ID 显式恢复。模型或前端不能靠“用户说好”替代确认。
+
+confirm API 在一个 mutate 中合并摘要并明确确认，不要求先 PATCH 再确认。跳过字段独立保存在 GoalDraft JSON，填写后清除；assumptions 是派生说明，SQLite 读取重建以避免旧“有能力/四周”假设进入生成上下文。自述基础始终未验证，不修改学习掌握状态。路线阶段用稳定拓扑排序显示投入与实践验证建议；Agent 选择节点数量，修订可缩减数量并说明差异，纯解释无需写图谱。已发布路线仍只经提案调整。验收见[Agent 主导规划](exec-plans/completed/agent-led-planning.md)，手动入口验收见[引导式规划计划](exec-plans/completed/guided-planning.md)。
 
 planning version 覆盖目标/问题/草稿的每次写入，graph revision/content_revision 则沿用领域发布/提案语义。发布同时核对 planning version 与 graph revision；HTTP/模型拒绝覆盖 published，内部旧 update_node/add_dependency 仍保留转回 draft 的兼容行为。real/业务 fixture 在发布后及启动时调用 `ensure_goal`，仅在缺少学习状态时初始化，不覆盖已有成绩；初次发布两次写入仍非原子；提案接受已同事务显式迁移学习图谱/保留历史，语义/依赖使全局content_revision推进、旧题/包只读，metadata仅推进revision。
 

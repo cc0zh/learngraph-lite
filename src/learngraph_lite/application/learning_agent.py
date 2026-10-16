@@ -20,6 +20,7 @@ from learngraph_lite.application.learning import LearningRepository, LearningSer
 from learngraph_lite.application.planning import PlanningRepository, PlanningState
 from learngraph_lite.application.proposals import GraphProposalService, ProposalError, ProposalInput
 from learngraph_lite.application.proposal_generation import proposal_operation_key
+from learngraph_lite.application.skills import SkillCatalog, SkillTurn, prepare_skill_history
 from learngraph_lite.domain.learning import GraphStatus
 
 
@@ -48,7 +49,7 @@ class NextActionInput(ContextInput):
 class LearningContext:
     def __init__(self, planning: PlanningRepository, learning: LearningRepository,
                  documents: DocumentRepository | None = None, lessons: LessonRepository | None = None,
-                 proposals: GraphProposalService | None = None):
+                 proposals: GraphProposalService | None = None, skills: SkillCatalog | None = None):
         self._planning = planning
         self._learning_repository = learning
         self._learning = LearningService(learning)
@@ -56,6 +57,7 @@ class LearningContext:
         self._documents = DocumentService(documents) if documents is not None else None
         self._lessons = lessons
         self._proposals = proposals
+        self._skills = skills
 
     def locate_run_source(self, goal_id: str, node_id: str | None, source: dict) -> dict:
         if self._documents is None:
@@ -122,6 +124,9 @@ class LearningContext:
             raise LearningContextError("invalid_scope", "goal_id and node_id are required.")
         goal_id, node_id = request.goal_id, request.node_id
         initial = self.context(goal_id, node_id)
+        # Event explanation input is server-built business data, not a user skill selection.
+        explicit_text = "" if request.mode == "explanation" else request.user_text
+        skill_turn = SkillTurn(self._skills, request.mode, explicit_text)
 
         def read(args: dict, *, recommend: bool = False):
             try:
@@ -210,10 +215,13 @@ class LearningContext:
                 generation_instructions += "create_lesson 每任务保存一个声明式学习包，可使用刚生成的 exercise_ids；包的引用表也独立于回答和题目。"
 
         def project(text: str) -> dict:
-            return {**(turn.project_output(text) if turn is not None else {}), **generated}
+            return {**(turn.project_output(text) if turn is not None else {}), **generated,
+                    **skill_turn.project_usage()}
         document_instructions = DOCUMENT_INSTRUCTIONS if turn is not None else "当前没有资料检索工具，不编造来源引用。"
+        skill_turn.register(tools)
         return PreparedRun(AgentRunner(model, tools), (
-            TextMessage(role="system", content=LEARNING_INSTRUCTIONS + "\n" + document_instructions + "\n" + generation_instructions),
+            TextMessage(role="system", content=LEARNING_INSTRUCTIONS + "\n" + document_instructions + "\n"
+                        + generation_instructions + "\n" + skill_turn.prompt()),
             TextMessage(role="user", content="learning_context: " + json.dumps(initial, ensure_ascii=False)),
             TextMessage(role="user", content=request.user_text),
-        ), project_output=project if turn is not None or request.mode == "teaching" else None)
+        ), project_output=project, prepare_history=prepare_skill_history)

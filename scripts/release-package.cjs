@@ -31,7 +31,7 @@ function packageRelease(root = repoRoot) {
       git_sha: sha,
       generated_at_utc: new Date().toISOString(),
       artifact: 'repo-metadata.tgz',
-      note: 'Replace scripts/release-package.cjs with the real project build packaging when the stack is known.',
+      note: 'Source archive only; not an installer or deployable binary. Install locked dependencies and build separately.',
     };
     fs.writeFileSync(path.join(staging, 'release-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
     for (const name of ['repo-metadata.tgz', 'release-manifest.json']) {

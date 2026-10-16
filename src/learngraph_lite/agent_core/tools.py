@@ -22,6 +22,7 @@ class Tool:
     input_schema: dict[str, Any]
     handler: Callable[[dict[str, Any]], Any]
     input_model: InputModel | None = None
+    ends_turn: bool = False
 
     @classmethod
     def from_model(
@@ -30,10 +31,11 @@ class Tool:
         description: str,
         input_model: InputModel,
         handler: Callable[[dict[str, Any]], Any],
+        *, ends_turn: bool = False,
     ) -> "Tool":
         schema = input_model.model_json_schema()
         schema["additionalProperties"] = False
-        return cls(name, description, schema, handler, input_model)
+        return cls(name, description, schema, handler, input_model, ends_turn)
 
     def as_model_tool(self) -> dict[str, Any]:
         return {

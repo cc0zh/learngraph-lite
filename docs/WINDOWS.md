@@ -2,21 +2,22 @@
 
 ## 环境与命令
 
-使用 Node.js 22+（含 npm）和 Git。打包与完整测试使用系统 `tar`；先确认工具可用：
+使用 Node.js 22.12+（含 npm）、Python 3.13+、uv 和 Git。打包与完整 Node 工具测试使用系统 `tar`；先确认工具可用：
 
 ```powershell
 node --version
 npm.cmd --version
 git --version
 tar --version
+uv --version
 ```
 
-这些是仓库工具的运行要求，不需要 Bash、rsync、Perl 或 npm 依赖安装。LearnGraph 后端检查还需要 Python 3.13+ 和 uv；先运行 `uv sync --locked --group dev` 安装锁定依赖。通过 `npm.cmd run dev:api` 启动本地 fixture API，查询/取消/SSE 示例见根 README。
+不需要 Bash、rsync 或 Perl。基础 Node 仓库检查仅用标准库，但 React 应用/构建和浏览器测试需要 npm 依赖：先运行 `npm.cmd ci` 与 `uv sync --locked --group dev`。通过 `npm.cmd run dev` 启动无 Key 业务 UI；`dev:api` 只是独立 echo 协议 fixture，查询/取消/SSE 示例见 [API 手册](api-guide.md)。浏览器安装与完整验证见[测试指南](demo/stage-review-real-testing.md)。
 
 从仓库根目录执行：
 
 ```powershell
-npm.cmd run ci
+npm.cmd run check
 npm.cmd run release-package
 ```
 
@@ -24,7 +25,7 @@ npm.cmd run release-package
 
 ## 命令入口
 
-初始化的安装和用法由模板源码 README 维护；本地可运行 `node scripts/create-project.cjs --help` 查看入口。
+当前应用启动与模型配置以 [README](../README.md) 为准。保留的源码复制工具可通过 `node scripts/create-project.cjs --help` 查看；它不是额外的运行前置，不要求 `npm link` 或全局安装。应用归档与模板兼容边界见 [CI/CD](CICD.md)。
 
 PowerShell 可能优先选择 npm 生成的 `.ps1` 包装器。使用 `npm.cmd`、`code-harness-init.cmd` 可避免执行策略对包装器的限制；cmd 中也可使用。macOS/Linux 使用无后缀命令。
 

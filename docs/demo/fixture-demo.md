@@ -25,4 +25,4 @@ This is a deterministic fixture demo for local review. It does not call a real m
 ## Evidence boundary
 
 - This demo proves the current deterministic application/domain slices can be replayed locally.
-- Real model smoke, browser UI, FastAPI routes, SQLite persistence and video recording are still separate M5 work.
+- Real model smoke, browser UI, FastAPI routes, SQLite persistence and video recording are not exercised by this in-memory demo. See [current acceptance status](../QUALITY_SCORE.md) for their evidence and remaining limits.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -16,6 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from learngraph_lite.application.agent import AgentLoop, RunAdmissionError, RunRequest, TERMINAL_STATUSES
+from learngraph_lite.application.conversations import ConversationError, ConversationService
 from learngraph_lite.application.documents import DocumentAccessError
 from learngraph_lite.application.document_imports import DocumentImports, MAX_UPLOAD_BYTES
 from learngraph_lite.application.exercise_generation import ExerciseError, GenerateExercise
@@ -24,6 +26,7 @@ from learngraph_lite.application.lessons import LessonError, LessonService
 from learngraph_lite.application.learning_agent import LearningContext, LearningContextError
 from learngraph_lite.application.planning import PlanningError, PlanningService
 from learngraph_lite.application.planning_generation import CandidateGraph
+from learngraph_lite.application.planning_agent import PlanningAnswer, PlanningQuestion
 from learngraph_lite.application.proposals import GraphProposalService, OperationInput, ProposalError, ProposalInput
 from learngraph_lite.application.proposal_generation import ProposalGenerationInput
 from learngraph_lite.domain.learning import GoalDraft, GraphSnapshot, GraphValidationError, RevisionConflict
@@ -42,6 +45,30 @@ def _unique_skipped_fields(value: list[str]) -> list[str]:
 
 SkippedFields = Annotated[list[Literal["desired_outcome", "current_level", "time_budget_minutes"]],
                           Field(max_length=3), AfterValidator(_unique_skipped_fields)]
+
+
+class CreateConversation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: Identifier
+    goal_id: Identifier | None = None
+    node_id: Identifier | None = None
+    title: Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=2000)] | None = None
+
+
+class PublicConversation(BaseModel):
+    session_id: str
+    kind: Literal["planning", "learning", "general"]
+    title: str
+    goal_id: str | None
+    node_id: str | None
+    created_at: datetime
+    legacy: bool = False
+
+
+class CreateWorkbenchGoal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal_id: Identifier
+    title: Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1, max_length=2000)]
 
 
 class SubmitRun(BaseModel):
@@ -210,6 +237,50 @@ class GraphTask(PlanningTask):
     feedback: str = Field(default="", max_length=2000)
 
 
+class PlanningAgentTask(PlanningTask):
+    user_text: str = Field(min_length=1, max_length=16000)
+    response_to_run_id: Identifier | None = None
+    answers: list[PlanningAnswer] | None = Field(default=None, min_length=1, max_length=3)
+
+    @model_validator(mode="after")
+    def valid_response(self):
+        if not self.user_text.strip():
+            raise ValueError("user_text must contain text")
+        if (self.answers is not None) != (self.response_to_run_id is not None):
+            raise ValueError("Answers require response_to_run_id and vice versa")
+        return self
+
+
+class QuestionsCard(BaseModel):
+    kind: Literal["questions"]
+    title: str
+    questions: list[PlanningQuestion]
+
+
+class GoalReviewCard(BaseModel):
+    kind: Literal["goal_review"]
+
+
+class RouteReviewCard(BaseModel):
+    kind: Literal["route_review"]
+
+
+class PlanningChanges(BaseModel):
+    added: list[str]
+    removed: list[str]
+    updated: list[str]
+    before_minutes: int
+    after_minutes: int
+    node_titles: dict[str, str]
+
+
+class PlanningAgentOutput(BaseModel):
+    planning: PlanningView
+    card: QuestionsCard | GoalReviewCard | RouteReviewCard | None
+    changes: PlanningChanges | None
+    response_to_run_id: str | None = None
+
+
 class EditGraph(CandidateGraph):
     expected_version: int = Field(ge=0)
 
@@ -253,14 +324,22 @@ class ProposalDecisionView(BaseModel):
     learning_reset: bool
 
 
+class SkillUsage(BaseModel):
+    skill_id: str = Field(min_length=1, max_length=64)
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    activation: Literal["tool", "explicit"]
+
+
 class AnswerSources(BaseModel):
     citation_map: dict[str, AnswerSource] = Field(default_factory=dict)
     unverified_citation_ids: list[str] = Field(default_factory=list)
     exercises: list[PublicExercise] | None = None
     source_mode: Literal["general", "documents"] | None = None
     planning: PlanningView | None = None
+    planning_agent: PlanningAgentOutput | None = None
     lesson: PublicLesson | None = None
     proposal: PublicProposal | None = None
+    skill_usage: list[SkillUsage] | None = None
 
 
 class SubmitExercises(BaseModel):
@@ -327,6 +406,7 @@ class LocatedSource(BaseModel):
 
 
 class PublicRun(BaseModel):
+    response_to_run_id: str | None = None
     user_text: str = ""
     mode: str = "runner"
     partial_text: str = ""
@@ -380,12 +460,19 @@ def create_app(
     lessons: GenerateLesson | None = None,
     lesson_events: LessonService | None = None,
     proposals: GraphProposalService | None = None,
+    conversations: ConversationService | None = None,
 ) -> FastAPI:
     """Create a process-local API, with cooperative shutdown and snapshot-first SSE."""
     if not math.isfinite(heartbeat_seconds) or heartbeat_seconds <= 0:
         raise ValueError("heartbeat_seconds must be finite and positive")
     if model_mode not in {"fixture", "real"}:
         raise ValueError("model_mode must be fixture or real")
+
+    def submit(request: RunRequest):
+        if conversations is None:
+            return loop.submit(request)
+        return conversations.admit(request.session_id, request.goal_id, request.node_id, request.mode,
+                                   lambda: loop.submit(request))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -425,7 +512,8 @@ def create_app(
     @app.exception_handler(RunAdmissionError)
     async def admission_error(request: Request, exc: RunAdmissionError):
         status = {"session_busy": 409, "capacity_exceeded": 429, "idempotency_conflict": 409,
-                  "shutting_down": 503, "storage_unavailable": 503, "invalid_scope": 422, "session_scope_conflict": 409, "invalid_retry": 409}
+                  "shutting_down": 503, "storage_unavailable": 503, "invalid_scope": 422, "session_scope_conflict": 409,
+                  "invalid_retry": 409, "planning_response_used": 409}
         return _error(
             status[exc.code], exc.code, str(exc),
             retryable=exc.code in {"session_busy", "capacity_exceeded", "shutting_down"},
@@ -460,6 +548,12 @@ def create_app(
     @app.exception_handler(PlanningError)
     async def planning_error(request: Request, exc: PlanningError):
         return _error(404 if exc.code == "goal_not_found" else 409, exc.code, str(exc))
+
+    @app.exception_handler(ConversationError)
+    async def conversation_error(request: Request, exc: ConversationError):
+        status = (404 if exc.code in {"conversation_not_found", "node_not_found"} else
+                  422 if exc.code == "invalid_conversation" else 409)
+        return _error(status, exc.code, str(exc))
 
     @app.exception_handler(ProposalError)
     async def proposal_error(request: Request, exc: ProposalError):
@@ -527,6 +621,23 @@ def create_app(
         def search_documents(goal_id: Identifier, body: DocumentSearch):
             return document_imports.search(goal_id, body.query, node_id=body.node_id, limit=body.limit)
 
+    if conversations is not None:
+        @app.get("/api/conversations", response_model=list[PublicConversation])
+        def list_conversations():
+            return conversations.list()
+
+        @app.get("/api/conversations/{session_id}", response_model=PublicConversation)
+        def get_conversation(session_id: Identifier):
+            return conversations.get(session_id)
+
+        @app.post("/api/conversations", status_code=201, response_model=PublicConversation)
+        def create_conversation(body: CreateConversation):
+            return conversations.create(**body.model_dump())
+
+        @app.post("/api/workbench/goals", status_code=201, response_model=PlanningView)
+        def create_workbench_goal(body: CreateWorkbenchGoal):
+            return conversations.create_goal(body.goal_id, body.title)
+
     if planning is not None:
         @app.get("/api/goals", response_model=list[PlanningView])
         def list_goals():
@@ -558,7 +669,7 @@ def create_app(
             return planning.describe(goal_id)
 
         def planning_run(goal_id, body, mode):
-            return public_run(loop.submit(RunRequest(
+            return public_run(submit(RunRequest(
                 session_id=f"planning:{goal_id}", task_ref=f"goal:{goal_id}", goal_id=goal_id,
                 user_text="澄清目标" if mode == "clarify" else "生成图谱", mode=mode,
                 idempotency_key=body.request_id, retry_of_run_id=body.retry_of_run_id,
@@ -569,6 +680,18 @@ def create_app(
         @app.post("/api/goals/{goal_id}/clarify", status_code=202, response_model=PublicRun, response_model_exclude_unset=True)
         def clarify_goal(goal_id: Identifier, body: PlanningTask):
             return planning_run(goal_id, body, "clarify")
+
+        @app.post("/api/goals/{goal_id}/planning-runs", status_code=202, response_model=PublicRun,
+                  response_model_exclude_unset=True)
+        def agent_planning(goal_id: Identifier, body: PlanningAgentTask):
+            return public_run(submit(RunRequest(
+                session_id=f"planning:{goal_id}", task_ref=f"goal:{goal_id}", goal_id=goal_id,
+                user_text=body.user_text, mode="planning", idempotency_key=body.request_id,
+                retry_of_run_id=body.retry_of_run_id, planning_version=body.expected_version,
+                response_to_run_id=body.response_to_run_id,
+                planning_answers_json=json.dumps([answer.model_dump() for answer in body.answers],
+                    ensure_ascii=False, sort_keys=True) if body.answers is not None else "", stream=True,
+            )))
 
         @app.post("/api/goals/{goal_id}/graph-drafts", status_code=202, response_model=PublicRun, response_model_exclude_unset=True)
         def generate_graph(goal_id: Identifier, body: GraphTask):
@@ -619,7 +742,7 @@ def create_app(
         @app.post("/api/goals/{goal_id}/graph-proposals/generate", status_code=202,
                   response_model=PublicRun, response_model_exclude_unset=True)
         def generate_proposal(goal_id: Identifier, body: SubmitProposal):
-            return public_run(loop.submit(RunRequest(
+            return public_run(submit(RunRequest(
                 session_id=body.session_id, task_ref=f"goal:{goal_id}", goal_id=goal_id,
                 user_text="生成图谱提案", mode="proposal", idempotency_key=body.request_id,
                 retry_of_run_id=body.retry_of_run_id, proposal_purpose=body.purpose,
@@ -639,7 +762,7 @@ def create_app(
         @app.post("/api/goals/{goal_id}/nodes/{node_id}/exercises", status_code=202,
                   response_model=PublicRun, response_model_exclude_unset=True)
         def generate_exercises(goal_id: Identifier, node_id: Identifier, body: SubmitExercises):
-            return public_run(loop.submit(RunRequest(
+            return public_run(submit(RunRequest(
                 session_id=body.session_id, user_text="生成练习", idempotency_key=body.request_id,
                 mode="exercise", goal_id=goal_id, node_id=node_id,
                 exercise_count=body.count, exercise_purpose=body.purpose,
@@ -662,7 +785,7 @@ def create_app(
         @app.post("/api/goals/{goal_id}/nodes/{node_id}/lessons", status_code=202,
                   response_model=PublicRun, response_model_exclude_unset=True)
         def generate_lesson(goal_id: Identifier, node_id: Identifier, body: SubmitLesson):
-            return public_run(loop.submit(RunRequest(
+            return public_run(submit(RunRequest(
                 session_id=body.session_id, user_text="生成学习页", idempotency_key=body.request_id,
                 mode="lesson", goal_id=goal_id, node_id=node_id, lesson_purpose=body.purpose,
                 lesson_exercise_ids=tuple(body.exercise_ids), retry_of_run_id=body.retry_of_run_id,
@@ -750,9 +873,12 @@ def create_app(
         if body.mode == "explanation":
             if lesson_events is None:
                 return _error(409, "explanation_not_configured", "Lesson explanations are not configured.")
-            return public_run(lesson_events.submit_explanation(session_id, body.goal_id, body.node_id,
-                body.source_event_id, body.explanation_slot, body.request_id, body.retry_of_run_id))
-        record = loop.submit(RunRequest(
+            def explain():
+                return lesson_events.submit_explanation(session_id, body.goal_id, body.node_id,
+                    body.source_event_id, body.explanation_slot, body.request_id, body.retry_of_run_id)
+            return public_run(conversations.admit(session_id, body.goal_id, body.node_id, body.mode, explain)
+                              if conversations is not None else explain())
+        record = submit(RunRequest(
             session_id=session_id, user_text=body.user_text, idempotency_key=body.request_id,
             goal_id=body.goal_id, node_id=body.node_id,
             mode=body.mode, retry_of_run_id=body.retry_of_run_id,

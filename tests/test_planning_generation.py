@@ -507,7 +507,8 @@ def test_skips_avoid_clarification_and_prompt_marks_self_report_unverified():
         assert context["goal"]["time_budget_minutes"] is None and context["planning_reference_minutes"] == 240
         assert context["goal"]["current_level"] == "" and len(context["goal"]["skipped_fields"]) == 3
         assert "缺失基础不能假设" in instruction and "不得当作已验证能力" in instruction
-        assert "必要性" in instruction and "学习顺序" in instruction and "可观察" in instruction and "实践或验证" in instruction
+        assert "知识地图" in instruction and "独立主题可无连线" in instruction
+        assert "不强制项目交付" in instruction and "实践或验证" in instruction
         service.confirm_goal("g1", service.get_state("g1").version, current_level="我已精通")
         result = loop.run(request(service, key="reported"))
         assert result.status == "completed", result.error

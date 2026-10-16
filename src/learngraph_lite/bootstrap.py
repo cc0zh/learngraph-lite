@@ -12,6 +12,7 @@ from learngraph_lite.agent_core import AgentRunner, ModelResponse, TextMessage, 
 from learngraph_lite.agent_core.models import ModelGateway
 from learngraph_lite.agent_core.gateway import budgeted
 from learngraph_lite.application.agent import AgentLoop, DirectResult, RunRepository, RunRequest
+from learngraph_lite.application.conversations import ConversationService
 from learngraph_lite.application.exercise_generation import GenerateExercise
 from learngraph_lite.application.lesson_generation import GenerateLesson
 from learngraph_lite.application.lessons import LessonError, LessonRepository, LessonService
@@ -21,8 +22,10 @@ from learngraph_lite.application.learning import LearningRepository, LearningSer
 from learngraph_lite.application.learning_agent import LearningContext
 from learngraph_lite.application.planning import PlanningRepository, PlanningService
 from learngraph_lite.application.planning_generation import GeneratePlanning
+from learngraph_lite.application.planning_agent import PlanningContext
 from learngraph_lite.application.proposals import GraphProposalService
 from learngraph_lite.application.proposal_generation import GenerateProposal
+from learngraph_lite.application.skills import SkillCatalog
 
 
 def _load_dotenv() -> None:
@@ -86,10 +89,12 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
                         documents: DocumentRepository | None = None,
                         lessons: LessonRepository | None = None,
                         runs: RunRepository | None = None,
-                        proposals: GraphProposalService | None = None) -> AgentLoop:
-    context = LearningContext(planning, learning, documents, lessons, proposals)
+                        proposals: GraphProposalService | None = None,
+                        skills: SkillCatalog | None = None) -> AgentLoop:
+    context = LearningContext(planning, learning, documents, lessons, proposals, skills)
     generator = GenerateExercise(learning, context.context, documents)
     planner = GeneratePlanning(PlanningService(planning), documents)
+    planning_context = PlanningContext(PlanningService(planning), documents, skills)
 
     def plan(request, budget, root_task_id):
         gateway = budgeted(model, budget)
@@ -108,6 +113,8 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
         return DirectResult(f"练习已保存（{label}）。", result, dict(gateway.usage))
 
     def validate(request):
+        if request.mode == "planning":
+            planning_context.validate(request, loop)
         if request.mode == "proposal":
             if proposals is None:
                 raise ValueError("Proposal generation is not configured.")
@@ -152,10 +159,13 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
 
     def prepare(request, budget, root):
         validate(request)
+        if request.mode == "planning":
+            return planning_context.prepare(budgeted(model, budget), request, loop)
         return context.prepare(budgeted(model, budget), request, root)
 
-    return AgentLoop(AgentRunner(model, build_echo_tools()), direct_handlers=handlers, validate_run=validate,
+    loop = AgentLoop(AgentRunner(model, build_echo_tools()), direct_handlers=handlers, validate_run=validate,
                      prepare_run=prepare, repository=runs)
+    return loop
 
 
 def smoke() -> str:
@@ -208,9 +218,12 @@ def _create_business_app(gateway, mode: str, database):
     from learngraph_lite.infrastructure.document_parser import SubprocessDocumentParser
     from learngraph_lite.infrastructure.run_persistence import SQLiteRunRepository
     from learngraph_lite.infrastructure.proposal_persistence import SQLiteProposalRepository
+    from learngraph_lite.infrastructure.file_skills import FileSkillCatalog
+    from learngraph_lite.infrastructure.conversation_persistence import SQLiteConversationRepository
 
     imports = None
     try:
+        skills = FileSkillCatalog(Path(__file__).with_name("skills"))
         database_path = Path(database or os.environ.get("LEARNGRAPH_DATABASE_PATH", ".local/learngraph.sqlite3"))
         database_path.parent.mkdir(parents=True, exist_ok=True)
         planning = SQLitePlanningRepository(database_path)
@@ -224,8 +237,9 @@ def _create_business_app(gateway, mode: str, database):
             state = planning.get(item["goal_id"])
             if state.graph is not None and state.graph.status.value == "published":
                 learning_service.ensure_goal(state.graph)
-        context = LearningContext(planning, learning, documents, lessons, proposals)
-        loop = build_learning_loop(gateway, planning, learning, documents, lessons, SQLiteRunRepository(database_path), proposals)
+        context = LearningContext(planning, learning, documents, lessons, proposals, skills)
+        loop = build_learning_loop(gateway, planning, learning, documents, lessons, SQLiteRunRepository(database_path), proposals, skills)
+        conversations = ConversationService(SQLiteConversationRepository(database_path), PlanningService(planning), loop)
         imports = DocumentImports(documents, SubprocessDocumentParser(), PlanningService(planning))
         return create_app(loop, model_mode=mode, model_configured=mode == "real", on_close=gateway.close,
                           learning_context=context,
@@ -233,7 +247,7 @@ def _create_business_app(gateway, mode: str, database):
                           lessons=GenerateLesson(lessons, learning, context.context, documents),
                           lesson_events=LessonService(lessons, LearningService(learning), loop, context.context),
                           planning=PlanningService(planning), on_publish=learning_service.ensure_goal,
-                          document_imports=imports, proposals=proposals)
+                          document_imports=imports, proposals=proposals, conversations=conversations)
     except Exception:
         if imports is not None:
             imports.close()

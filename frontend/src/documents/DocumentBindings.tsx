@@ -1,15 +1,16 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { chunkLink, documentError, documentPath, documentRequest } from './http';
-import { DocumentError, PAGE_SIZE, Pagination, parsing } from './shared';
+import { workbenchHref } from '../workbench/navigation';
+import { chunkLink, documentError, documentHref, documentPath, documentRequest } from './http';
+import { DocumentError, DocumentLink, PAGE_SIZE, Pagination, parsing } from './shared';
 import type { DocumentPage, PublicDocument, SearchResult } from './types';
 import './documents.css';
 
-export interface DocumentBindingsProps { goalId: string; nodeId?: string; defaultDocumentId?: string; onChanged?: () => void }
+export interface DocumentBindingsProps { goalId: string; nodeId?: string; defaultDocumentId?: string; refreshToken?: number; onChanged?: () => void }
 export function DocumentBindings(props: DocumentBindingsProps) {
   return <BindingsScope key={`${props.goalId}:${props.nodeId || ''}:${props.defaultDocumentId || ''}`} {...props}/>;
 }
-function BindingsScope({ goalId, nodeId, defaultDocumentId, onChanged }: DocumentBindingsProps) {
+function BindingsScope({ goalId, nodeId, defaultDocumentId, refreshToken, onChanged }: DocumentBindingsProps) {
   const selectId = useId();
   const [page, setPage] = useState<DocumentPage>();
   const [offset, setOffset] = useState(0);
@@ -54,7 +55,7 @@ function BindingsScope({ goalId, nodeId, defaultDocumentId, onChanged }: Documen
       finally { if (!controller.signal.aborted) setLoading(false); }
     })();
     return () => controller.abort();
-  }, [base, scopeQuery, nodeId, defaultDocumentId, offset, refresh]);
+  }, [base, scopeQuery, nodeId, defaultDocumentId, offset, refresh, refreshToken]);
   const pending = page?.documents.some(parsing) || (currentDocument && parsing(currentDocument));
   useEffect(() => {
     if (!pending || loading || error || busy || searching) return;
@@ -95,10 +96,10 @@ function BindingsScope({ goalId, nodeId, defaultDocumentId, onChanged }: Documen
   return <section className="documents-scope doc-panel doc-bindings" role="region" aria-label={nodeId ? '节点资料绑定' : '目标资料绑定'} aria-busy={loading}>
     <h2>{nodeId ? '节点资料' : '目标资料'}</h2><p className="doc-hint">节点资料不是自动继承：先绑定目标，再为每个需要的节点显式绑定。解绑目标会清除此资料在该目标下的所有节点关联。</p>
     <DocumentError error={error}/>{loading && <p role="status">正在读取服务器绑定…</p>}
-    <div className="doc-actions"><a href="/documents">管理与上传资料</a><button type="button" className="quiet" disabled={loading || busy || searching} onClick={() => setRefresh(n => n + 1)}>刷新资料绑定</button></div>
+    <div className="doc-actions"><DocumentLink href={workbenchHref({ tool: 'documents', document: undefined, chunk: undefined, source_goal: goalId, source_node: nodeId })}>管理与上传资料</DocumentLink><button type="button" className="quiet" disabled={loading || busy || searching} onClick={() => setRefresh(n => n + 1)}>刷新资料绑定</button></div>
     {!loading && !error && !bound.length && <p className="doc-muted">{nodeId ? '此节点尚未显式绑定资料。' : '此目标尚未绑定资料。'}</p>}
     <ul className="doc-bound-list" aria-label="已绑定资料">{bound.map(item => <li key={item.id}>
-      <div><a href={`${documentPath(item.id)}?${new URLSearchParams({ goal: goalId, ...(nodeId ? { node: nodeId } : {}) })}`}>{item.document?.filename || item.id}</a>
+      <div><DocumentLink href={documentHref(item.id, goalId, nodeId)}>{item.document?.filename || item.id}</DocumentLink>
         {item.document && item.document.status !== 'ready' && <p className="doc-muted">资料未就绪，暂不可用于检索。</p>}</div>
       <button type="button" className="quiet" disabled={busy || loading || searching} onClick={() => { void mutate(item.id, true); }}>解绑资料</button>
     </li>)}</ul>
@@ -114,7 +115,7 @@ function BindingsScope({ goalId, nodeId, defaultDocumentId, onChanged }: Documen
     {results && <section role="region" aria-label="资料检索结果"><p className="doc-muted">仅搜索当前{nodeId ? '节点显式' : '目标'}绑定资料，最多 5 个片段；排序分值不代表可信度。</p>
       {results.empty && <p>没有匹配的原文片段，请尝试其他关键词。</p>}
       {results.hits.map(hit => <article className="doc-search-hit" key={hit.chunk.id}><h3>{hit.chunk.heading || '原文片段'}{hit.chunk.page_number !== null && ` · 第 ${hit.chunk.page_number} 页`}</h3>
-        <p className="doc-plain">{hit.chunk.text}</p><a href={chunkLink(hit.chunk.document_id, hit.chunk.id, goalId, nodeId)}>查看片段原文</a>
+        <p className="doc-plain">{hit.chunk.text}</p><DocumentLink href={chunkLink(hit.chunk.document_id, hit.chunk.id, goalId, nodeId)}>查看片段原文</DocumentLink>
       </article>)}
     </section>}
   </section>;

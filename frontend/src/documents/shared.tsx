@@ -1,4 +1,13 @@
+import type { ReactNode } from 'react';
+import { navigateWorkbench } from '../workbench/navigation';
 import type { PublicDocument } from './types';
+
+export function DocumentLink({ href, children }: { href: string; children: ReactNode }) {
+  return <a href={href} onClick={event => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault(); navigateWorkbench(href);
+  }}>{children}</a>;
+}
 
 export const PAGE_SIZE = 50;
 export const parsing = (document: PublicDocument) => ['uploaded', 'parsing'].includes(document.status);

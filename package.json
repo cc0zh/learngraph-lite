@@ -1,7 +1,9 @@
 {
   "name": "mini-learngraph4",
   "private": true,
-  "workspaces": ["frontend"],
+  "workspaces": [
+    "frontend"
+  ],
   "engines": {
     "node": ">=22.12.0"
   },
@@ -9,12 +11,16 @@
     "code-harness-init": "./scripts/create-project.cjs"
   },
   "scripts": {
+    "docs:dev": "vitepress dev docs --host 127.0.0.1 --port 4173 --strictPort",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs --host 127.0.0.1 --port 4174 --strictPort",
+    "test:docs": "playwright test --config tests/docs.playwright.config.ts",
     "dev": "node scripts/dev.cjs",
     "dev:web": "npm run dev --workspace frontend",
     "dev:api:business": "uv run --locked uvicorn learngraph_lite.bootstrap:create_business_fixture_app --factory --app-dir src --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 2",
     "check:web": "npm run build --workspace frontend",
     "check": "npm run ci && npm run check:web",
-    "test:e2e": "npm run test:e2e --workspace frontend",
+    "test:e2e": "npm run test:e2e --workspace frontend --",
     "ci": "node scripts/ci.cjs",
     "test": "node --test tests/tooling.test.cjs && uv run --locked python scripts/run-python-tests.py",
     "check:docs": "node scripts/check-docs.cjs",
@@ -32,5 +38,8 @@
     "eval:offline": "uv run --locked python evals/run.py",
     "demo:fixture": "uv run --locked python scripts/run-fixture-demo.py",
     "demo:learning-agent": "uv run --locked python -X utf8 scripts/run-learning-agent-demo.py"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
   }
 }

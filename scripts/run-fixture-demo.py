@@ -151,7 +151,7 @@ def render_demo(data: dict[str, str]) -> str:
             "## Evidence boundary",
             "",
             "- This demo proves the current deterministic application/domain slices can be replayed locally.",
-            "- Real model smoke, browser UI, FastAPI routes, SQLite persistence and video recording are still separate M5 work.",
+            "- Real model smoke, browser UI, FastAPI routes, SQLite persistence and video recording are not exercised by this in-memory demo. See [current acceptance status](../QUALITY_SCORE.md) for their evidence and remaining limits.",
             "",
         ]
     )

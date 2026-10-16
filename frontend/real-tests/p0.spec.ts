@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { writeFileSync } from 'node:fs';
 
-test('real P0: UI create → guided summary → confirm → stage review → teach/tool → answer → recommendation → reload', async ({ page }) => {
+test('real P0: UI intent → Agent goal review → confirm → route review → teach/tool → answer → recommendation → reload', async ({ page }) => {
   const report: Record<string, unknown> = { mode: 'real', scope: 'browser P0', started_at: new Date().toISOString(),
     checks: [], runs: [], limitations: ['one small sample, not 20-case model quality evaluation', 'no real failure/cancel/retry coverage'] };
   const checks = report.checks as string[];
@@ -20,44 +20,38 @@ test('real P0: UI create → guided summary → confirm → stage review → tea
     }
   });
   try {
-    await page.goto('/');
+    await page.goto('/?mode=goal');
     await expect(page.getByText('Real · 模型已配置')).toBeVisible();
-    await page.getByLabel('你想学会什么？').fill('理解 Python 列表与元组的区别（真实浏览器验收）');
-    await page.getByRole('button', { name: '开始规划' }).click();
-    await expect(page.getByRole('heading', { name: '学习目标', level: 2 })).toBeVisible();
-    report.goal_id = page.url().split('/goals/')[1].split('/')[0];
+    await page.getByLabel('描述学习目标').fill('我会 Python 变量与基本语法，希望总共投入 60 分钟理解列表与元组的区别，能解释可变性差异并为简单场景选择列表或元组。不涉及部署，偏好短例子和练习，路线尽量精简为三个阶段。请根据这些已提供信息提出目标草稿供我确认，不要替我确认或发布。（真实浏览器验收）');
+    await page.getByRole('button', { name: '发送并创建目标' }).click();
+    await expect(page.getByRole('region', { name: '目标审核', exact: true })).toBeVisible();
+    report.goal_id = new URL(page.url()).searchParams.get('goal');
+    expect(new URL(page.url()).pathname).toBe('/');
     checks.push('browser-created-goal');
-    await expect(page.getByRole('heading', { name: '希望学到什么程度？', level: 3 })).toBeVisible();
-    await page.getByLabel('期望成果（也可以自己写）', { exact: true }).fill('能解释可变性差异，并为简单场景选择列表或元组');
-    await page.getByRole('button', { name: '下一步', exact: true }).click();
-    await page.getByLabel('已有基础（用户自述，未验证）', { exact: true }).fill('会 Python 变量与基本语法');
-    await page.getByRole('button', { name: '下一步', exact: true }).click();
-    await page.getByLabel('可投入时间（总分钟）', { exact: true }).fill('60');
-    await page.getByRole('button', { name: '下一步', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '目标摘要', level: 3 })).toBeVisible();
-    await page.getByRole('button', { name: '确认目标摘要', exact: true }).click();
-    await page.getByText('路线长度（可选）', { exact: true }).click();
-    await page.getByLabel('路线节点数').selectOption('3');
-    await page.getByRole('button', { name: '生成路线草稿' }).click();
-    await expect(page.getByRole('list', { name: '学习阶段', exact: true }).getByRole('listitem')).toHaveCount(3);
-    await expect(page.getByLabel('节点标题')).not.toBeVisible();
-    await page.getByText('高级：图谱与节点编辑', { exact: true }).click();
-    await expect(page.getByLabel('节点标题')).toBeVisible();
-    await expect(page.getByRole('button', { name: '审核完成，发布路线' })).toBeEnabled();
-    checks.push('guided-questions-summary-and-single-confirmation');
-    const originalTitle = await page.getByLabel('节点标题').inputValue();
-    await page.getByLabel('节点标题').fill(`${originalTitle} · 人工审核`);
-    await page.getByRole('button', { name: '保存路线修改' }).click();
-    await expect(page.getByText('有未保存修改')).not.toBeVisible();
-    await page.getByRole('button', { name: '审核完成，发布路线' }).click();
-    await page.getByRole('link', { name: '进入学习' }).click();
-    await expect(page.getByRole('heading', { name: `${originalTitle} · 人工审核`, exact: true })).toBeVisible();
-    checks.push('three-node-graph-review-edit-publish');
+    await expect(page.getByRole('heading', { name: '希望学到什么程度？', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '确认目标并生成图谱', exact: true }).click();
+    const route = page.getByRole('region', { name: '路线审核', exact: true });
+    await expect(route).toBeVisible();
+    const stages = route.getByRole('list', { name: '图谱知识节点', exact: true }).getByRole('listitem');
+    expect(await stages.count()).toBeGreaterThanOrEqual(1);
+    expect(await stages.count()).toBeLessThanOrEqual(30);
+    checks.push('native-planning-tools-goal-review-and-explicit-confirmation');
+    const originalTitle = await stages.first().getByRole('heading', { level: 3 }).innerText();
+    await route.getByRole('button', { name: '确认并发布路线', exact: true }).click();
+    await expect(page.getByRole('complementary', { name: '图谱与节点', exact: true })).toContainText('已发布');
+    await page.getByRole('region', { name: '浏览图谱节点' }).getByRole('button', { name: originalTitle, exact: true }).click();
+    await page.getByRole('button', { name: '开始学习此节点', exact: true }).click();
+    await expect(page.locator('.wb-conversation > .run-status > strong')).toHaveText('已完成');
+    await expect(page.getByLabel('当前对话范围')).toContainText(originalTitle);
+    checks.push('agent-selected-small-graph-explicit-review-publish');
     await page.getByLabel('向当前节点提问').fill('请用一个短例子讲解当前节点，并务必调用 create_exercise 工具创建一道单选练习。不要在回复中披露正确答案或解析。');
     await page.getByRole('button', { name: '发送问题' }).click();
-    await expect(page.locator('.assistant-message').last()).toContainText('create_exercise');
+    await expect(page.locator('.wb-conversation > .run-status')).toContainText('create_exercise');
+    await expect(page.locator('.wb-conversation > .run-status > strong')).toHaveText('已完成');
+    const teachingReply = await page.locator('.assistant-message').last().innerText();
+    await page.getByRole('tab', { name: '学习内容', exact: true }).click();
     await expect(page.getByRole('button', { name: '生成练习', exact: true })).toBeEnabled();
-    const exerciseCards = page.locator('.practice-panel .exercise');
+    const exerciseCards = page.locator('.wb-exercises .exercise');
     await expect(exerciseCards.first()).toBeVisible();
     expect(await exerciseCards.first().getByRole('radio').count()).toBeGreaterThanOrEqual(2);
     await expect(page.locator('.progress-card')).toContainText('未开始');
@@ -78,7 +72,8 @@ test('real P0: UI create → guided summary → confirm → stage review → tea
     await page.reload();
     await expect(exerciseCards).toHaveCount(count + 1);
     await expect(page.locator('.feedback')).toBeVisible();
-    await expect(page.locator('.assistant-message').last()).toContainText('create_exercise');
+    await page.getByRole('tab', { name: '对话', exact: true }).click();
+    await expect(page.locator('.assistant-message').last()).toHaveText(teachingReply);
     expect(posts).toEqual([]);
     checks.push('browser-reload-persisted-artifacts-no-post');
     for (const width of [375, 768, 1024, 1440]) {
