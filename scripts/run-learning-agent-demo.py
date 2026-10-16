@@ -116,6 +116,7 @@ def run_demo(database: Path, *, real: bool = False) -> dict:
             practice = {"button": button.output, "teaching": tutor.output,
                         "feedback": feedback, "next_action": context.next_action("demo-goal", "document-loading", 10)}
         return {"mode": "real" if real else "fixture", "data": "fixture-seeded SQLite",
+                "validation_scope": "call-and-completion-demo", "quality_assessed": False,
                 "goal_id": "demo-goal", "node_id": "document-loading", "status": record.status,
                 "final_text": record.final_text, "usage": record.usage, "output": record.output,
                 "empty_retrieval": empty, "exercise_generation": practice}

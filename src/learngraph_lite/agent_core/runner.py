@@ -25,15 +25,17 @@ class RunnerResult:
 class AgentRunner:
     """Run the generic model-tool loop without importing LearnGraph code."""
 
-    def __init__(self, model: ModelGateway, tools: ToolRegistry):
+    def __init__(self, model: ModelGateway, tools: ToolRegistry, *, retain_tool_text: bool = False):
         self._model = model
         self._tools = tools
+        self._retain_tool_text = retain_tool_text
 
     def run(self, messages: tuple[TextMessage, ...], budget: Budget | None = None, on_progress=None) -> RunnerResult:
         budget = budget or (self._model.budget if isinstance(self._model, BudgetedModelGateway) else Budget())
         model = budgeted(self._model, budget)
         transcript = list(messages)
         errors: list[str] = []
+        assistant_text: list[str] = []
         usage = model.usage
 
         try:
@@ -45,6 +47,8 @@ class AgentRunner:
                     response = model.stream_complete(tuple(transcript), self._tools.model_tools(),
                         lambda text: on_progress("message.delta", {"text": text}))
                 budget.check_step(step)
+                if response.content:
+                    assistant_text.append(response.content)
                 if response.content or response.tool_calls:
                     transcript.append(
                         TextMessage(
@@ -58,7 +62,7 @@ class AgentRunner:
                     return RunnerResult(
                         status="completed",
                         messages=tuple(transcript),
-                        final_text=response.content,
+                        final_text="\n\n".join(assistant_text) if self._retain_tool_text else response.content,
                         errors=tuple(errors),
                         usage=usage,
                     )
@@ -93,7 +97,7 @@ class AgentRunner:
                             on_progress("tool.finished", {"call_id": call.id, "name": call.name, "status": "failed"})
                         continue
                     try:
-                        result = tool.execute(args)
+                        result = tool.execute(args, messages=tuple(transcript))
                         succeeded = not (isinstance(result, dict) and "error" in result)
                     except ToolError as exc:
                         result = {"error": str(exc)}
@@ -119,7 +123,8 @@ class AgentRunner:
                             if on_progress is not None:
                                 on_progress("tool.finished", {"call_id": skipped.id, "name": skipped.name,
                                                              "status": "skipped"})
-                        return RunnerResult("completed", tuple(transcript), response.content, tuple(errors), usage)
+                        text = "\n\n".join(assistant_text) if self._retain_tool_text else response.content
+                        return RunnerResult("completed", tuple(transcript), text, tuple(errors), usage)
             raise BudgetExceeded("step budget exhausted")
         except BudgetExceeded as exc:
             errors.append(str(exc))

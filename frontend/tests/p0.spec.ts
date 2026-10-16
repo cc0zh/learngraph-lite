@@ -28,10 +28,10 @@ test('P0: plan, publish, stream, answer, recover and stop/retry', async ({ page 
   await page.getByRole('button', { name: '开始学习此节点', exact: true }).click();
   await expect(page.locator('.wb-conversation > .run-status > strong')).toHaveText('已完成');
   await expect(page.getByLabel('当前对话范围')).toContainText('边界与验收');
-  await page.getByLabel('向当前节点提问').fill('用例子解释当前节点，并调用工具给我一道练习');
+  await page.getByLabel('向当前节点提问').fill('能举个简单的例子讲讲，再出一道单选练习让我试试吗？');
   await page.getByRole('button', { name: '发送问题' }).click();
-  await expect(page.locator('.wb-conversation > .run-status')).toContainText('get_learning_context');
-  await expect(page.locator('.wb-conversation > .run-status')).toContainText('create_exercise');
+  await expect(page.locator('.wb-conversation > .run-status')).toContainText('读取当前学习状态');
+  await expect(page.locator('.wb-conversation > .run-status')).toContainText('生成练习');
   await expect(page.locator('.assistant-message').last()).toContainText('这是 fixture');
   await expect(page.locator('.assistant-message').last()).toContainText('后续问题会结合本会话的完整回合。');
   await learningContent(page);

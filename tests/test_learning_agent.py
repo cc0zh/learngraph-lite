@@ -234,6 +234,7 @@ def test_learning_agent_demo_refuses_existing_database():
         result = module.run_demo(database)
         json.dumps(result, ensure_ascii=False)  # The CLI must be able to emit the full demo result.
         assert result["mode"] == "fixture" and result["status"] == "completed"
+        assert result["validation_scope"] == "call-and-completion-demo" and result["quality_assessed"] is False
         assert "short_explanation:document-loading" in result["final_text"]
         assert result["output"]["citation_map"]["C1"]["cited"] is True
         assert result["output"]["unverified_citation_ids"] == []

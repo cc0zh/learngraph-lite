@@ -1,7 +1,9 @@
 """Offline tests of the opt-in real P0 driver; no developer config/provider calls."""
 import importlib.util
+import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from learngraph_lite.agent_core import ModelResponse
 from learngraph_lite.bootstrap import _create_business_app
@@ -27,7 +29,17 @@ def test_real_p0_driver_checks_http_tool_artifacts_and_reopen_with_fixture_only(
             return _create_business_app(meter, "fixture", database)
 
         report = {"mode": "fixture"}
-        module.journey(factory, report)
+        inputs = json.loads((Path(__file__).resolve().parents[1] / 'frontend/real-tests/user-inputs.json').read_text(encoding='utf-8'))
+        observed = []
+        original_completed = module.completed
+        def check_product_input(api, report, phase, path, body):
+            if phase == 'teaching':
+                observed.append(body['user_text'])
+                assert body['user_text'] == inputs['practiceRequest']
+            return original_completed(api, report, phase, path, body)
+        with patch.object(module, 'completed', side_effect=check_product_input):
+            module.journey(factory, report)
+        assert observed == [inputs['practiceRequest']]
         assert [item["phase"] for item in report["runs"]] == ["clarify", "graph", "teaching", "button-exercise"]
         assert all(item["status"] == "completed" for item in report["runs"])
         assert "sqlite-reopen-without-model-calls" in report["checks"]

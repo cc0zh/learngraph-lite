@@ -26,6 +26,7 @@ from learngraph_lite.application.planning_agent import PlanningContext
 from learngraph_lite.application.proposals import GraphProposalService
 from learngraph_lite.application.proposal_generation import GenerateProposal
 from learngraph_lite.application.skills import SkillCatalog
+from learngraph_lite.application.teaching_guidance import taught_examples
 
 
 def _load_dotenv() -> None:
@@ -107,8 +108,13 @@ def build_learning_loop(model: ModelGateway, planning: PlanningRepository, learn
 
     def generate(request, budget, root_task_id):
         gateway = budgeted(model, budget)
+        examples = taught_examples(tuple(TextMessage("assistant", run.final_text)
+            for run in loop.list_runs(request.session_id)[-8:]
+            if run.status == "completed" and run.mode in {"teaching", "runner"}
+            and run.goal_id == request.goal_id and run.node_id == request.node_id))
         result = generator.generate(request.goal_id, request.node_id, root_task_id,
-                                    {"count": request.exercise_count, "purpose": request.exercise_purpose}, gateway)
+                                    {"count": request.exercise_count, "purpose": request.exercise_purpose}, gateway,
+                                    taught_examples=examples)
         label = "基于上传资料" if result["source_mode"] == "documents" else "非基于上传资料"
         return DirectResult(f"练习已保存（{label}）。", result, dict(gateway.usage))
 

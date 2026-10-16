@@ -7,6 +7,8 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ValidationError
 
+from .models import TextMessage
+
 
 class ToolError(RuntimeError):
     """A tool failed in a way that should be returned to the model."""
@@ -20,9 +22,10 @@ class Tool:
     name: str
     description: str
     input_schema: dict[str, Any]
-    handler: Callable[[dict[str, Any]], Any]
+    handler: Callable[..., Any]
     input_model: InputModel | None = None
     ends_turn: bool = False
+    with_context: bool = False
 
     @classmethod
     def from_model(
@@ -30,12 +33,12 @@ class Tool:
         name: str,
         description: str,
         input_model: InputModel,
-        handler: Callable[[dict[str, Any]], Any],
-        *, ends_turn: bool = False,
+        handler: Callable[..., Any],
+        *, ends_turn: bool = False, with_context: bool = False,
     ) -> "Tool":
         schema = input_model.model_json_schema()
         schema["additionalProperties"] = False
-        return cls(name, description, schema, handler, input_model, ends_turn)
+        return cls(name, description, schema, handler, input_model, ends_turn, with_context)
 
     def as_model_tool(self) -> dict[str, Any]:
         return {
@@ -47,14 +50,15 @@ class Tool:
             },
         }
 
-    def execute(self, args: dict[str, Any]) -> Any:
-        if self.input_model is None:
-            return self.handler(args)
-        try:
-            validated = self.input_model.model_validate(args, strict=True, extra="forbid")
-        except ValidationError as exc:
-            raise ToolError(f"invalid arguments for tool {self.name}: {exc}") from exc
-        return self.handler(validated.model_dump(mode="python"))
+    def execute(self, args: dict[str, Any], *, messages: tuple[TextMessage, ...] = ()) -> Any:
+        if self.input_model is not None:
+            try:
+                validated = self.input_model.model_validate(args, strict=True, extra="forbid")
+            except ValidationError as exc:
+                raise ToolError(f"invalid arguments for tool {self.name}: {exc}") from exc
+            args = validated.model_dump(mode="python")
+        # Host-supplied context is never a model-editable schema parameter.
+        return self.handler(args, messages) if self.with_context else self.handler(args)
 
 
 @dataclass

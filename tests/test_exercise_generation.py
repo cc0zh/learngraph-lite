@@ -18,7 +18,7 @@ from learngraph_lite.application.learning import InMemoryLearningRepository, Lea
 from learngraph_lite.application.learning_agent import LearningContext
 from learngraph_lite.application.planning import InMemoryPlanningRepository, PlanningService, candidate_rag_graph
 from learngraph_lite.bootstrap import build_learning_loop, create_real_app
-from learngraph_lite.infrastructure import SQLiteLearningRepository, SQLitePlanningRepository
+from learngraph_lite.infrastructure import SQLiteLearningRepository, SQLitePlanningRepository, SQLiteRunRepository
 
 
 def seed(database=None):
@@ -99,6 +99,134 @@ def test_direct_and_tutor_generation_share_budget_repair_and_private_projection(
         finally:
             loop.close()
 
+
+def test_tutor_hands_recent_and_current_examples_to_generator_but_receives_only_ids():
+    planning, learning = seed()
+    earlier = "演示：x = (2, 4, 6)，x[1:] 为 (4, 6)。"
+    current = "演示：s = (10, 20, 30, 40)，s[-2] 为 30。"
+    new_prompt = "独立练习标记：u = (3, 5, 7)，u[:2] 是什么？"
+    model = ScriptedModel([
+        ModelResponse(content=earlier),
+        ModelResponse(content=current, tool_calls=(ToolCall("new", "create_exercise", "{}"),)),
+        ModelResponse(content=batch(new_prompt)),
+        ModelResponse(content="已保存，请在题卡作答。"),
+    ])
+    loop = build_learning_loop(model, planning, learning)
+    try:
+        assert loop.run(request("teaching", "intro")).status == "completed"
+        result = loop.run(request("teaching", "practice"))
+        assert result.status == "completed", result.error
+        generator_input = json.loads(model.calls[2][0][1].content)
+        assert generator_input["taught_examples"] == [earlier, current]
+        assert result.final_text == current + "\n\n已保存，请在题卡作答。"
+        receipt = json.loads(next(m.content for m in model.calls[3][0] if m.role == "tool" and m.tool_call_id == "new"))
+        assert receipt["exercise_ids"] == [result.output["exercises"][0]["id"]]
+        assert receipt["source_mode"] == "general" and "exercises" not in receipt
+        assert all(new_prompt not in m.content and "选项甲" not in m.content for m in model.calls[3][0])
+        assert result.output["exercises"][0]["prompt"] == new_prompt
+        assert len(learning.get("g1").exercises) == 1 and not learning.get("g1").attempts
+    finally:
+        loop.close()
+
+
+def test_illustrated_prompt_is_repaired_once_and_never_saved_as_formal_practice():
+    for repaired in (True, False):
+        planning, learning = seed()
+        example = "先看例子：计算 s[1:3] 的结果。已讲过答案。"
+        duplicate = "计算 s[1:3] 的结果。"
+        model = ScriptedModel([
+            ModelResponse(content=example, tool_calls=(ToolCall("new", "create_exercise", "{}"),)),
+            ModelResponse(content=batch(duplicate)),
+            ModelResponse(content=batch("改用新数据，计算 u[::2]。" if repaired else duplicate)),
+            ModelResponse(content="处理完成"),
+        ])
+        loop = build_learning_loop(model, planning, learning)
+        try:
+            result = loop.run(request("teaching"))
+            stored = list(learning.get("g1").exercises.values())
+            assert all(item.prompt != duplicate for item in stored)
+            assert len(stored) == (1 if repaired else 0)
+            assert len(learning.get("g1").generation_operations) == (1 if repaired else 0)
+            assert "已讲解" in model.calls[2][0][-1].content
+            if repaired:
+                assert len(result.output["exercises"]) == 1
+            else:
+                assert "exercises" not in result.output
+        finally:
+            loop.close()
+
+def test_button_practice_uses_only_completed_teaching_from_same_session_and_node():
+    planning, learning = seed()
+    model = ScriptedModel([
+        ModelResponse(content="本会话已讲解：切片例子甲"),
+        ModelResponse(content="其他会话的讲解不应带入"),
+        ModelResponse(content=batch("新场景题")),
+    ])
+    loop = build_learning_loop(model, planning, learning)
+    try:
+        loop.run(request("teaching", "intro"))
+        loop.run(replace(request("teaching", "other"), session_id="other-session"))
+        result = loop.run(request("exercise", "button"))
+        assert result.status == "completed", result.error
+        assert json.loads(model.calls[2][0][1].content)["taught_examples"] == ["本会话已讲解：切片例子甲"]
+    finally:
+        loop.close()
+
+
+def test_python_reference_reaches_tutor_and_generator_without_optional_skill_loading():
+    planning, learning = seed()
+    context = LearningContext(planning, learning)
+    initial = context.context("g1", "document-loading")
+    initial["goal"]["title"] = "Python 列表与元组"
+    model = ScriptedModel([ModelResponse(content=batch())])
+    gateway = BudgetedModelGateway(model, Budget())
+    with patch.object(context, "context", return_value=initial):
+        prepared = context.prepare(gateway, request("teaching"), "root")
+        assert "tuple 切片不保证新对象" in prepared.messages[0].content
+        assert "不要续写题干" in prepared.messages[0].content
+        GenerateExercise(learning, context.context).generate("g1", "document-loading", "root", {}, gateway)
+    assert "tuple 切片不保证新对象" in model.calls[0][0][0].content
+
+
+def test_streamed_demonstration_survives_terminal_snapshot_and_sqlite_reopen():
+    class StreamingModel(ScriptedModel):
+        def stream_complete(self, messages, tools, on_delta):
+            response = self.complete(messages, tools)
+            if response.content:
+                on_delta(response.content)
+            return response
+
+    with tempfile.TemporaryDirectory() as directory:
+        database = Path(directory) / "practice.sqlite3"
+        planning, learning = seed(database)
+        demo = "先看演示：x=(2,4,6)，x[1:] 得到 (4,6)。"
+        acknowledgement = "新练习已保存，请在题卡作答。"
+        model = StreamingModel([
+            ModelResponse(content=demo, tool_calls=(ToolCall("create", "create_exercise", "{}"),)),
+            ModelResponse(content=batch("独立题：y=(3,5,7)，y[-1] 是什么？")),
+            ModelResponse(content=acknowledgement),
+        ])
+        loop = build_learning_loop(model, planning, learning, runs=SQLiteRunRepository(database))
+        try:
+            result = loop.run(replace(request("teaching"), stream=True))
+            assert result.status == "completed", result.error
+            assert result.final_text == demo + "\n\n" + acknowledgement
+            deltas = [event.payload["text"] for event in loop.events(result.run_id) if event.type == "message.delta"]
+            assert deltas == [demo, acknowledgement]
+            terminal = loop.events(result.run_id)[-1]
+            assert terminal.payload["final_text"] == result.final_text
+            assert len(terminal.payload["output"]["exercises"]) == 1
+        finally:
+            loop.close()
+        restored = build_learning_loop(ScriptedModel([]), planning, learning, runs=SQLiteRunRepository(database))
+        try:
+            assert restored.get_run(result.run_id).final_text == result.final_text
+            assert len(restored.get_run(result.run_id).output["exercises"]) == 1
+        finally:
+            restored.close()
+
+
+def test_tutor_generation_and_repair_keep_six_call_shared_budget():
     # Main loop + generation + repair consume exactly six calls; the seventh is blocked.
     for complete_on_sixth in (True, False):
         planning, learning = seed()

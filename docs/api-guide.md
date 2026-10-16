@@ -65,9 +65,9 @@ real API 将请求输入、session 作用域、root task、结果/usage 与递�
 
 配置完成后可手动运行 `npm.cmd run smoke:real`（macOS/Linux 使用 `npm run smoke:real`）。它会产生真实 API 请求和费用，依次验证普通回答、原生 echo 调用及工具结果后的回答；不进入默认 CI。2026-10-14 曾在 DeepSeek/deepseek-flash 执行并通过（历史协议证据）；离线 SDK 测试不能替代真实证据，该结果也不保证所有配置/供应商兼容。
 
-供应商协议通过后，可用 `npm.cmd run smoke:p0:real` 验证一条真实 P0 HTTP 旅程：澄清、确认、三节点图谱生成/人工编辑发布、教学工具出题、正式作答/掌握度/推荐、按钮出题、请求/交卷去重和 SQLite 重开。它实际调用模型，整条旅程最多12次请求；使用新建 `.local/real-p0-*.sqlite3`，不修改日常数据库，重开阶段禁止模型调用。脱敏 JSON 证据在 `.local/real-p0-*.json`，不保存 Key 或模型原文。可传 `-- --database .local/my-real-p0.sqlite3 --report .local/my-real-p0.json`，已有文件会拒绝覆盖。此入口不是浏览器 E2E，也不是生成质量/稳定性评估；两类证据分别记录。
+供应商协议通过后，可用 `npm.cmd run smoke:p0:real` 验证一条真实 P0 HTTP 旅程：澄清、确认、三节点图谱生成/人工编辑发布、教学工具出题、正式作答/掌握度/推荐、按钮出题、请求/交卷去重和 SQLite 重开。它实际调用模型，整条旅程最多12次请求；使用新建 `.local/real-p0-*.sqlite3`，不修改日常数据库，重开阶段禁止模型调用。脱敏 JSON 证据在 `.local/real-p0-*.json`，不保存 Key 或模型原文。可传 `-- --database .local/my-real-p0.sqlite3 --report .local/my-real-p0.json`，已有文件会拒绝覆盖。旧版本教学输入明确指定工具名和参数，当前已改为自然需求但未真实复验；历史通过不能证明自主工具选择。此入口不是浏览器 E2E，也不是生成质量/稳定性评估。
 
-`npm.cmd run smoke:p0:browser:real` 是**付费opt-in**：Playwright/Chromium从默认工作台输入点击完成 P0，不预置接口结果、不mock模型、不自动重跑。脚本已迁移但本轮未付费复验，不能把2026-10-14旧入口的一次6调用通过当作当前证据。固定8010/5183，新建`.local/p0-browser-real-*.sqlite3/json`，拒绝已有数据库，全旅程最多14次真实请求。JSON仅ID/状态/工具名/usage/provider host，截图/trace/数据库留本地不提交。默认CI/E2E不执行此入口，P1真实语义质量须另评估。
+`npm.cmd run smoke:p0:browser:real` 是**付费opt-in**：Playwright/Chromium从默认工作台输入点击完成 P0，不预置接口结果、不mock模型、不自动重跑。自然目标/出题输入版已实际完成一次真实小样本；链路断言通过，人工审查仍发现答案提前提示、概念错误与自由回复露出内部名，不记教学质量合格。最新结果与旧受提示样本的限制见[质量与验收](QUALITY_SCORE.md)。固定8010/5183，新建`.local/p0-browser-real-*.sqlite3/json`，拒绝已有数据库，全旅程最多14次真实请求。JSON记录ID/状态/工具名/usage/provider host；失败断言可能含模型文本差异，原报告与截图/trace/数据库都留本地不提交，只发布脱敏摘要。默认CI/E2E不执行此入口，P1真实语义质量须另评估。
 
 ## 复现节点学习 Agent
 
@@ -77,7 +77,7 @@ real API 将请求输入、session 作用域、root task、结果/usage 与递�
 npm.cmd run demo:learning-agent
 ```
 
-脚本创建临时数据库，确认 fixture 目标、发布 8 节点图谱并记录 3 次示例作答，绑定一份资料清洗笔记。随后通过原生工具协议读取上下文、十分钟下一步推荐，检索并读取资料片段，生成带 `[C1]` 的回答及来源表，演示空召回，再完成按钮/教学工具出题、提交答案和推荐闭环。输出标记 `mode: fixture` 和 `data: fixture-seeded SQLite`。这验证应用调用链，不代表真实模型能力。
+脚本创建临时数据库，确认 fixture 目标、发布 8 节点图谱并记录 3 次示例作答，绑定一份资料清洗笔记。随后通过原生工具协议读取上下文、十分钟下一步推荐，检索并读取资料片段，生成带 `[C1]` 的回答及来源表，演示空召回，再完成按钮/教学工具出题、提交答案和推荐闭环。输出标记 `mode: fixture` 和 `data: fixture-seeded SQLite`。这验证应用调用链，不代表真实模型能力；演示输出的 `validation_scope: call-and-completion-demo`、`quality_assessed: false` 也适用于 `--real`，完成状态不是检索或语义支持验收。
 
 要把演示数据留给 real API，先使用一个尚不存在的数据库文件：
 
@@ -182,6 +182,8 @@ Invoke-RestMethod -Method Post -ContentType 'application/json; charset=utf-8' `
 ## 生成练习与作答
 
 real API 的按钮出题入口是 `POST /api/goals/{goal_id}/nodes/{node_id}/exercises`，body 为 `{"session_id":"practice-1","request_id":"generate-1","count":1,"purpose":"practice"}`，题量限 1–3，返回 202 run；查询和 SSE 沿用 `/api/runs/{run_id}`。教学对话在节点 run body 中设置 `mode: teaching`，与按钮共用 `GenerateExercise`。`npm run dev` 使用 SQLite 业务 fixture，独立 `dev:api` 才仅用于 echo 协议演示；上面的 demo 也可离线复现闭环。
+
+教学工具结果只给模型 `exercise_ids`、`source_mode` 和作答回执；题干/选项仍在公共 `output.exercises` 与学习内容题卡，不从 API 删除。宿主将最近已讲解 assistant 正文（最多 6000 UTF-8 字节）作为生成器避重复数据，按钮路径只采同会话/目标/节点最近已完成讲解；客户端不能传入或覆盖这一内部参数。生成器要求用新数值/场景，精确题干重复会进入现有一次 repair，失败不保存半批；这不是任意等价解答的检测器。工具前演示与保存回执共同保留在教学终态文本中；仍可用回执 ID 继续创建学习包。
 
 `GET` 同一节点 exercises 路径列出当前内容版本题目；`GET /api/goals/{goal_id}/exercises/{exercise_id}` 读取公共题目。提交 `POST /api/goals/{goal_id}/exercises/{exercise_id}/attempts`，body 为 `{"submission_id":"answer-1","selected_option_id":"b"}`。题目、工具结果、run 与 SSE 不包含正式答案/解析；提交反馈才返回。重复 submission 同输入返回原结果，不同输入返回 409；同题仅首次作答计入掌握度，旧版本拒绝作答。 `GET /api/goals/{goal_id}/exercises/{exercise_id}/feedback`只读返回已有最后反馈（历史可回顾）；未答为`feedback:null`，不泄答案、不改掌握度。
 

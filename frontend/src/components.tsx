@@ -9,7 +9,14 @@ import type { Command } from './useRuns';
 import { Citations } from './documents';
 
 const statusLabels: Record<string, string> = { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已停止', interrupted: '已中断', budget_exceeded: '已达预算上限' };
-const planningToolLabels: Record<string, string> = { read_planning_context: '读取当前目标与路线', request_clarification: '整理需要澄清的问题', propose_goal_draft: '提炼目标摘要', generate_route_draft: '整理学习路线草稿' };
+const toolLabels: Record<string, string> = {
+  read_planning_context: '读取当前目标与路线', request_clarification: '整理需要澄清的问题',
+  propose_goal_draft: '提炼目标摘要', generate_route_draft: '整理学习路线草稿',
+  get_learning_context: '读取当前学习状态', get_next_action: '查询下一步建议',
+  search_documents: '检索学习资料', read_document_chunk: '读取资料原文',
+  create_exercise: '生成练习', create_lesson: '生成学习包',
+  propose_graph_change: '提出图谱调整建议', read_skill: '读取学习指南',
+};
 export function ErrorBox({ error }: { error: string }) { return error ? <p className="error" role="alert">{error}</p> : null; }
 export function SafeMarkdown({ children }: { children: string }) { return <Markdown skipHtml disallowedElements={['img']}>{children}</Markdown>; }
 export function RunCitations({ run, goalId, nodeId }: { run: Run; goalId: string; nodeId?: string }) {
@@ -50,7 +57,7 @@ export function RunStatus({ run, stop, retry, readOnly = false }: { run?: Run; s
     {live && <span>{Math.max(0, Math.floor((now - Date.parse(run.created_at)) / 1000))} 秒</span>}
     {!readOnly && (!terminal(run.status) ? <button className="quiet" onClick={stop}>停止</button> : run.status !== 'completed' ? <button className="quiet" onClick={() => retry()}>重试</button> : null)}
     {run.error && <p className="error">{run.error}</p>}
-    {Object.values(run.tool_activity || {}).map(t => <div className="tool" key={t.call_id}>{run.mode === 'planning' ? planningToolLabels[t.name] || '处理规划信息' : t.name} · {statusLabels[t.status] || t.status}{t.elapsed_ms !== undefined && ` · ${t.elapsed_ms} ms`}</div>)}
+    {Object.values(run.tool_activity || {}).map(t => <div className="tool" data-tool-name={t.name} key={t.call_id}>{toolLabels[t.name] || '处理学习操作'} · {statusLabels[t.status] || t.status}{t.elapsed_ms !== undefined && ` · ${t.elapsed_ms} ms`}</div>)}
     {run.status === 'cancelled' && <small>停止不会撤销已经保存的业务结果。</small>}
   </div>;
 }

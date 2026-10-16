@@ -241,7 +241,9 @@ test('manual: knowledge nodes retain content, prerequisite editing and time inpu
     await expect(page.getByRole('checkbox', { name: '建立核心概念', exact: true })).not.toBeChecked();
     // Editing dependency edges remains an explicit, persisted graph operation.
     await page.getByRole('checkbox', { name: '建立核心概念', exact: true }).check();
+    const graphSaved = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/goals/${plan.goal_id}/graph`);
     await page.getByRole('button', { name: '保存图谱修改', exact: true }).click();
+    expect((await graphSaved).ok()).toBe(true);
     const saved = await (await request.get(`/api/goals/${plan.goal_id}`)).json();
     expect(saved.graph.edges).toEqual(expect.arrayContaining([...topologyEdges.map(edge => ({ ...edge, kind: 'prerequisite' })),
       { source: 'start', target: 'finish', kind: 'prerequisite' }]));

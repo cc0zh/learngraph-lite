@@ -128,7 +128,7 @@ def journey(factory, report):
         report["session_id"] = session
         path = f"/api/sessions/{session}/runs"
         command = {"request_id": "real-p0-teaching", "mode": "teaching", "goal_id": goal, "node_id": node,
-            "user_text": "先调用 get_learning_context 读取当前节点，再简要解释节点，调用 create_exercise 工具出题：一道单选练习，count=1，purpose=practice。不调用学习包工具，不披露正确选项或解析。"}
+            "user_text": "能举个简单的例子讲讲，再出一道单选练习让我试试吗？"}
         teaching = completed(api, report, "teaching", path, command)
         tools = teaching.get("tool_activity", {}).values()
         if not any(item["name"] == "create_exercise" and item["status"] == "completed" for item in tools):

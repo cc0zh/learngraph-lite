@@ -2,7 +2,9 @@
 
 from pathlib import Path
 import importlib.util
+import json
 import os
+import re
 import tempfile
 from unittest.mock import patch
 
@@ -17,6 +19,24 @@ def browser_server():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_real_browser_product_inputs_do_not_disclose_internal_test_expectations():
+    root = Path(__file__).resolve().parents[1]
+    inputs = json.loads((root / 'frontend/real-tests/user-inputs.json').read_text(encoding='utf-8'))
+    assert set(inputs) == {'goalIntent', 'practiceRequest'}
+    # Guard this acceptance sample, not a filter on messages that real users may type.
+    internal = re.compile(r'\b[a-z]+(?:_[a-z]+)+\b|\bAPI\b|schema|工具|验收|草稿供我|不要.{0,15}(?:答案|解析|确认|发布)', re.I)
+    for name, value in inputs.items():
+        assert isinstance(value, str) and value.strip(), name
+        assert internal.search(value) is None, f'{name} supplies internal instructions instead of user intent'
+
+
+def test_real_browser_journey_uses_guarded_user_inputs_not_inline_protocol_commands():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / 'frontend/real-tests/p0.spec.ts').read_text(encoding='utf-8')
+    assert "from './user-inputs.json' with { type: 'json' }" in source
+    assert re.findall(r'\.fill\((.*?)\)', source) == ['productInputs.goalIntent', 'productInputs.practiceRequest']
 
 
 def test_real_browser_factory_is_opt_in_and_refuses_existing_database_before_model():

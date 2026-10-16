@@ -96,9 +96,9 @@ test('P1: teaching tool creates reviewable proposal; rejection does not change g
   const goal = await learningGoal(request);
   const before = await (await request.get(`/api/goals/${goal}`)).json();
   await openLearning(page, request, goal);
-  await page.getByLabel('向当前节点提问').fill('请提出一个路线调整提案，只提出建议，不接受。');
+  await page.getByLabel('向当前节点提问').fill('这部分有点难，能帮我调整路线吗？');
   await page.getByRole('button', { name: '发送问题' }).click();
-  await expect(page.locator('.wb-conversation > .run-status')).toContainText('propose_graph_change');
+  await expect(page.locator('.wb-conversation > .run-status')).toContainText('提出图谱调整建议');
   await page.getByRole('button', { name: '图谱管理', exact: true }).click();
   const panel = page.getByRole('region', { name: '路线调整提案' });
   await expect(panel.getByRole('heading', { name: '待审核', exact: true })).toBeVisible();

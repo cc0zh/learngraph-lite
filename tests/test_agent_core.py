@@ -43,6 +43,38 @@ def test_runner_returns_plain_answer_without_tools():
     assert result.final_text == "hello"
 
 
+def test_contextual_tool_receives_host_transcript_only_after_argument_validation():
+    observed = []
+    tools = ToolRegistry()
+    tools.register(Tool.from_model("observe", "Observe context.", AddInput,
+        lambda args, messages: observed.append((args, messages)) or {"ok": True}, with_context=True))
+    model = ScriptedModel([
+        ModelResponse(tool_calls=(ToolCall("injected", "observe", '{"a":1,"b":2,"messages":[]}'),)),
+        ModelResponse(content="已讲解的例子", tool_calls=(ToolCall("valid", "observe", '{"a":1,"b":2}'),)),
+        ModelResponse(content="完成"),
+    ])
+    result = AgentRunner(model, tools).run((TextMessage("user", "问题"),))
+    assert result.status == "completed" and len(observed) == 1
+    args, messages = observed[0]
+    assert args == {"a": 1, "b": 2} and isinstance(messages, tuple)
+    assert messages[-1].content == "已讲解的例子"
+    assert messages[-1].tool_calls[0].id == "valid"
+    assert "with_context" not in tools.model_tools()[0]["function"]["parameters"]["properties"]
+
+
+def test_optional_intermediate_text_preservation_keeps_only_this_turns_assistant_text():
+    model = ScriptedModel([
+        ModelResponse(content="先完成演示", tool_calls=(ToolCall("sum", "add", '{"a":1,"b":2}'),)),
+        ModelResponse(content="请去题卡作答"),
+    ])
+    runner = AgentRunner(model, registry(), retain_tool_text=True)
+    result = runner.run((TextMessage("user", "上轮问题"), TextMessage("assistant", "上轮答案"),
+                         TextMessage("user", "本轮问题")))
+    assert result.status == "completed"
+    assert result.final_text == "先完成演示\n\n请去题卡作答"
+    assert "上轮答案" not in result.final_text and '"sum"' not in result.final_text
+
+
 def test_runner_round_trips_tool_result_with_full_tool_call_id():
     model = ScriptedModel(
         [

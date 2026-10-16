@@ -21,6 +21,7 @@ from learngraph_lite.application.planning import PlanningRepository, PlanningSta
 from learngraph_lite.application.proposals import GraphProposalService, ProposalError, ProposalInput
 from learngraph_lite.application.proposal_generation import proposal_operation_key
 from learngraph_lite.application.skills import SkillCatalog, SkillTurn, prepare_skill_history
+from learngraph_lite.application.teaching_guidance import concept_reference, taught_examples
 from learngraph_lite.domain.learning import GraphStatus
 
 
@@ -165,19 +166,26 @@ class LearningContext:
             bound_context = lambda _goal, _node: read({})
             generator = GenerateExercise(self._learning_repository, bound_context, self._document_repository)
 
-            def create_exercise(args: dict):
+            def create_exercise(args: dict, messages: tuple[TextMessage, ...]):
                 read({})
                 try:
-                    result = generator.generate(goal_id, node_id, root_task_id, args, model)
+                    result = generator.generate(goal_id, node_id, root_task_id, args, model,
+                                                taught_examples=taught_examples(messages))
                 except (ExerciseError, DocumentAccessError) as exc:
                     raise ToolError(f"{exc.code}: {exc}") from exc
                 generated.update(result)
-                return result
+                return {"exercise_ids": [item["id"] for item in result["exercises"]],
+                        "source_mode": result["source_mode"],
+                        "notice": "练习已保存，请在学习内容题卡作答；不要续写题干、选项或解法。"}
             tools.register(Tool.from_model(
-                "create_exercise", "Generate and save one batch of practice; returns only public questions.",
-                ExerciseInput, create_exercise,
+                "create_exercise", "Generate and save independent practice; returns an ID receipt, questions appear in learning content.",
+                ExerciseInput, create_exercise, with_context=True,
             ))
             generation_instructions = "create_exercise 可创建每任务一批单选题；题量1至3，使用相同参数重试。仅保存成功才算出题。来源模式以工具返回为准；题目 citation_map 属于该题，不能用作回答的引用表。正式答案和解析由作答接口返回，不猜测或披露正确选项。"
+            generation_instructions += ("用户同时要例子和练习时，先在调用工具的回复正文中完成演示，再调用 create_exercise。"
+                "演示与正式题分开：不得给待答题同数值、同表达式或只改名的等价解答，也不能替用户作答。"
+                "工具只返回 exercise_ids 回执，正式题在学习内容题卡展示；收到回执后只说明已保存和如何作答，"
+                "不要续写题干、选项、计算结果或解题提示。若还要学习包，可用回执 ID 调用 create_lesson。")
             if self._proposals is not None:
                 def propose_graph_change(args: dict):
                     read({})
@@ -219,9 +227,9 @@ class LearningContext:
                     **skill_turn.project_usage()}
         document_instructions = DOCUMENT_INSTRUCTIONS if turn is not None else "当前没有资料检索工具，不编造来源引用。"
         skill_turn.register(tools)
-        return PreparedRun(AgentRunner(model, tools), (
+        return PreparedRun(AgentRunner(model, tools, retain_tool_text=request.mode == "teaching"), (
             TextMessage(role="system", content=LEARNING_INSTRUCTIONS + "\n" + document_instructions + "\n"
-                        + generation_instructions + "\n" + skill_turn.prompt()),
+                        + concept_reference(initial) + "\n" + generation_instructions + "\n" + skill_turn.prompt()),
             TextMessage(role="user", content="learning_context: " + json.dumps(initial, ensure_ascii=False)),
             TextMessage(role="user", content=request.user_text),
         ), project_output=project, prepare_history=prepare_skill_history)

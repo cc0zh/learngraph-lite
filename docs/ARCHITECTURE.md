@@ -108,7 +108,9 @@ Markdown 按 ATX 标题切块并忽略代码围栏，PDF 按显式页码标记�
 
 `GenerateExercise` 位于 application：请求结构化候选，经严格 schema 和现有领域规则校验，生成服务端题目 ID，再通过 learning repository `mutate` 原子保存整批私有题目和 operation。模型调用在事务外，保存前重读规划版本，事务内检查最新学习图谱、取消和重复题。SQLite 使用 `BEGIN IMMEDIATE` 与 `learning_generation_operations` 的 `(goal_id, operation_key)` 主键；首次作答和 submission 去重也在同一学习事务完成。planning/learning 分别读取仍留下并发规划变更的窄窗口，后续需统一同步协议。
 
-按钮 `mode=exercise` 走 Loop direct handler；教学 `mode=teaching` 注册闭包绑定节点的 `create_exercise`，调用相同用例。operation key 使用 root task、操作类型、节点、内容版本和固定 purpose slot；count/purpose 属于 fingerprint，同键不同参数冲突。失败任务显式 retry 创建新 run 并保留 root；新任务创建新 root。私有候选及修复对话不回注教学 transcript，ToolResult/公共 DTO 只含公共题目及其来源表，提交反馈才返回答案。每题和回答的 C1 独立，题目来源不能并入回答表；生成 registry 与 real API 的 root/run 均可重读恢复。
+按钮 `mode=exercise` 走 Loop direct handler；教学 `mode=teaching` 注册闭包绑定节点的 `create_exercise`，调用相同用例。operation key 使用 root task、操作类型、节点、内容版本和固定 purpose slot；count/purpose 属于 fingerprint，同键不同参数冲突。失败任务显式 retry 创建新 run 并保留 root；新任务创建新 root。私有候选及修复对话不回注教学 transcript，公共 run/output 保留题目及来源表，但教学工具仅返回 exercise_ids/source_mode 回执，不把新题干和选项交回 tutor 续写解法；create_lesson 仍可引用回执 ID。提交反馈才返回答案。每题和回答的 C1 独立，题目来源不能并入回答表；生成 registry 与 real API 的 root/run 均可重读恢复。
+
+工具可显式启用通用 `with_context`：Runner 在严格参数校验后通过独立参数提供宿主 transcript，模型 schema 不暴露可伪造的 messages。教学应用只提取最近 assistant 正文、限 6000 UTF-8 字节，交给出题器作避重复数据；按钮出题只取同 session/goal/node 最近八条记录内已完成教学/runner 的正文。生成器要求换用独立数值/场景，并把归一化后已包含于讲解的题干纳入一次 repair 校验，不判定任意语义等价。教学 Runner 单独启用 `retain_tool_text`，终态保留本轮工具前的演示及最终回执，不丢讲解、不拼接历史；普通/规划 Runner 默认行为不变。`teaching_guidance` 还按 Python 列表/元组主题注入已核对的浅拷贝/身份参考，不依赖可选 Skill 是否读取。提示和精确重复保护不构成模型正确性或默认不泄漏的保证，真实修复效果见质量记录。
 
 兼容直接 clarify/graph 入口的 `GeneratePlanning` 复用 Loop direct handler、共享 BudgetedModelGateway 与严格 Pydantic 候选。旧澄清只对缺失且未主动跳过的字段提问，最多两轮；直接图谱入口默认十节点（规划 Agent 则自行选择 1–30），校验依赖和环，只保存 draft。`graph_feedback` 保存为 run 输入并参与去重/重试，当前草稿与用户反馈作为业务数据进入模型上下文，不能自动发布。模型调用在事务外，提交通过 planning repository `mutate` 在锁内或 SQLite `BEGIN IMMEDIATE` 中核对 expected_version、业务状态与取消；成功递增 version，失败回滚。run 输出取本次保存的快照，避免再次读取混入后续编辑。
 

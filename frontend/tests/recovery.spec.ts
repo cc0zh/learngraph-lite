@@ -17,7 +17,7 @@ for (const recovery of ['terminal-get-fails', 'terminal-found-by-query'] as cons
       if (response.request().method() === 'POST' && response.url().includes('/sessions/') && response.status() === 202) runId = (await response.json()).run_id;
     });
     await openLearning(page, request, goal);
-    await page.getByLabel('向当前节点提问').fill('请调用工具创建一道练习');
+    await page.getByLabel('向当前节点提问').fill('给我一道练习题。');
     await page.getByRole('button', { name: '发送问题' }).click();
     await expect.poll(() => runId).not.toBe('');
     await expect.poll(async () => (await (await request.get(`/api/runs/${runId}`)).json()).status).toBe('completed');
@@ -284,7 +284,9 @@ for (const dirty of ['goal', 'graph'] as const) {
     await expect(page.getByRole('button', { name: '审核完成，发布图谱', exact: true })).toBeDisabled();
     if (dirty === 'goal') {
       await expect(page.getByLabel('节点标题')).toBeDisabled();
+      const confirmation = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/goals/${goal}/confirm`);
       await page.getByRole('button', { name: '确认目标摘要', exact: true }).click();
+      expect((await confirmation).ok()).toBe(true);
       const saved = await (await request.get(`/api/goals/${goal}`)).json();
       expect(saved.goal.desired_outcome).toBe(input);
       expect(saved.goal.confirmed).toBe(true);

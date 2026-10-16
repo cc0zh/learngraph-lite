@@ -4,7 +4,14 @@
 
 当前状态、测试数量和最近证据只维护在[质量与验收](../QUALITY_SCORE.md)；本文负责复现步骤，不累加历史计数。唯一 `/` 是学习工作台，资料和图谱管理在主区通过 `tool` 切换；旧页面地址只读兼容跳转，不保留固定问卷。
 
-付费浏览器脚本已迁移到默认工作台创建/审核/节点/作答推荐，但本次未执行真实调用；HTTP smoke 验证直接澄清/图谱 API。脚本存在不等于当前工作台、规划 Agent 和 Skill 的真实质量已验收。2026-10-14 的历史真实结果不能代替当前版本复验，P1 真实语义质量、20 例真实评估和 M5 交接仍未完成。
+付费浏览器脚本已用自然目标/出题输入完成真实小样本，链路通过；当时内容有同题演示提前提示答案和 tuple 切片概念错误。后续已做讲解上下文/题目回执隔离、精确重复保护和主题参考修复，未再次付费验证，不记默认答案保护或教学质量通过。内部名称可见由用户接受，不作为本次修复要求。详情见[质量与验收](../QUALITY_SCORE.md)；P1 真实语义质量、20 例真实评估和 M5 交接仍未完成。
+
+### 用户旅程与协议测试分开
+
+- 产品旅程的输入只表达学习需求，如“能举个简单的例子讲讲，再出一道单选练习让我试试吗？”；不得告诉模型工具名、参数、应该出哪种审核卡或替产品补充“不许自动发布/不许泄漏答案”指令。安全边界应来自产品，而非测试作者扮演的用户。
+- 工具名可以出现在系统工具说明及测试断言中。检查本轮实际 completed 的工具、新增产物 ID 和持久状态，不把工具名可见、任务完成或已有题目当作本轮生成成功。
+- 浏览器真实输入集中在 `frontend/real-tests/user-inputs.json` 并有离线守卫；运行前可设 `LEARNGRAPH_REAL_BROWSER_APPROVED=1` 后执行 `node node_modules/@playwright/test/cli.js test --config frontend/playwright.real.config.ts --list` 检查发现/导入（不启动服务或模型），结束后清除此环境变量。实际付费仍须使用已授权的专用入口。发布前只读核对 draft 状态；公共答案字段隔离与回复语义泄漏分别检查——本轮虽没有直接说选项，例子已给出同题所需结果，不能记默认保护通过。
+- 明确指令调用 echo、指定工具顺序的手工编排是协议测试，可以保留，但必须与自然用户旅程、统计语义评估分开报告。fixture/mock 即便输入自然也不能证明真实模型会自主选工具。
 
 ## 离线回归（默认不收费）
 
@@ -37,7 +44,7 @@ Windows 使用 `.cmd`；macOS/Linux 使用 `npm`、`npx`，Linux CI 安装浏览
 | 资料 | React列表/上传/解析状态/显式目标与节点绑定/分页纯文本原文/引用；TXT/Markdown/文本PDF、FTS5，无OCR |
 | 学习包 | 四类固定组件、已有公共题卡、版本/历史反馈、ACK与解释独立会话；恢复event/slot/request，ACK不改成绩；真实内容质量未验收 |
 | SQLite | planning/document/learning/lesson/run/proposal/conversation可重开，未完成run转interrupted；提案接受规划/学习/状态同事务，初次publish仍两写 |
-| 浏览器验收 | fixture/mock 用例含统一工作台、P0/P1旅程、恢复与版本边界，375–1440响应式（学习包额外320）；另有历史 opt-in 真实 Chromium P0旅程，不覆盖新工作台 |
+| 浏览器验收 | fixture/mock 用例含统一工作台、P0/P1旅程、恢复与版本边界，375–1440响应式（学习包额外320）；另有当前工作台 opt-in 真实小样本和补充只读复核，范围及原失败见质量记录 |
 
 模型协议测试使用 MockTransport，失败/重试与部分浏览器边界使用 mock DTO，浏览器主闭环使用 fixture；这些离线证据不代表真实供应商兼容、生成质量或引用语义支持。回归覆盖未送达/响应丢失、同 ID 恢复、查询门禁、旧历史竞态、422/409解锁、超长节点和 dirty 编辑；真实验证与离线 E2E 分开记录。
 
@@ -63,7 +70,7 @@ npm.cmd run smoke:p0:browser:real
 npm.cmd run demo:learning-agent -- --real
 ```
 
-第一条只验证协议；第二条新SQLite验证P0 HTTP（最多12请求）；第三条新库/独立8010与5183端口验证真实P0 UI（最多14请求，不自动重跑）；第四条是fixture数据的真实资料问答，本轮未执行。付费入口默认CI不调用，P1质量仍需下面手测。
+第一条只验证协议，故可以明确要求 echo；第二条新SQLite验证P0 HTTP（最多12请求），教学问题已改成自然出题需求；第三条新库/独立8010与5183验证P0 UI（最多14请求，不自动重跑）；第四条仅为fixture数据的真实资料问答演示，本轮未执行，`completed` 不代表检索、引用支持或推荐合格，输出明确 `quality_assessed: false`。付费入口默认CI不调用，P1质量仍需下面手测。
 
 ## 启动 API 并测试学习包
 
@@ -106,7 +113,7 @@ Invoke-RestMethod -Method Post -ContentType 'application/json' -Body $event -Uri
 
 题卡测试：在OpenAPI先调用该节点的POST exercises，等待run完成，取公共题目ID放入POST lessons的exercise_ids，并使用新的session/request。检查quiz_choice只保存exercise_id，包与题目公共数据无答案；通过POST exercises/{id}/attempts提交自己的选项，反馈才包含答案/解析。不要假设真实题目的正确选项恒为b。通过GET context观察成绩，仅ACK不应改变成绩。
 
-教学工具测试：POST sessions/{id}/runs，body带request_id、user_text、goal_id=demo-goal、node_id=document-loading、mode=teaching，明确要求先生成练习，再调用create_lesson引用该题。检查工具是否实际执行、run输出与usage；不要把模型口头声称“已生成”当作保存证据。
+手工协议/编排测试：POST sessions/{id}/runs，body带request_id、user_text、goal_id=demo-goal、node_id=document-loading、mode=teaching，可以明确要求先生成练习，再调用create_lesson引用该题；这种输入不属于自然用户旅程。自然需求应另用“给我一份带练习的简短学习材料”等表述并观察实际选择。两者都应检查工具、run输出与持久产物，不把模型口头“已生成”当作证据。
 
 ## 测试解释与重启恢复
 
