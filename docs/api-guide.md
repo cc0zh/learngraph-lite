@@ -67,7 +67,7 @@ real API 将请求输入、session 作用域、root task、结果/usage 与递�
 
 供应商协议通过后，可用 `npm.cmd run smoke:p0:real` 验证一条真实 P0 HTTP 旅程：澄清、确认、三节点图谱生成/人工编辑发布、教学工具出题、正式作答/掌握度/推荐、按钮出题、请求/交卷去重和 SQLite 重开。它实际调用模型，整条旅程最多12次请求；使用新建 `.local/real-p0-*.sqlite3`，不修改日常数据库，重开阶段禁止模型调用。脱敏 JSON 证据在 `.local/real-p0-*.json`，不保存 Key 或模型原文。可传 `-- --database .local/my-real-p0.sqlite3 --report .local/my-real-p0.json`，已有文件会拒绝覆盖。旧版本教学输入明确指定工具名和参数，当前已改为自然需求但未真实复验；历史通过不能证明自主工具选择。此入口不是浏览器 E2E，也不是生成质量/稳定性评估。
 
-`npm.cmd run smoke:p0:browser:real` 是**付费opt-in**：Playwright/Chromium从默认工作台输入点击完成 P0，不预置接口结果、不mock模型、不自动重跑。自然目标/出题输入版已实际完成一次真实小样本；链路断言通过，人工审查仍发现答案提前提示、概念错误与自由回复露出内部名，不记教学质量合格。最新结果与旧受提示样本的限制见[质量与验收](QUALITY_SCORE.md)。固定8010/5183，新建`.local/p0-browser-real-*.sqlite3/json`，拒绝已有数据库，全旅程最多14次真实请求。JSON记录ID/状态/工具名/usage/provider host；失败断言可能含模型文本差异，原报告与截图/trace/数据库都留本地不提交，只发布脱敏摘要。默认CI/E2E不执行此入口，P1真实语义质量须另评估。
+`npm.cmd run smoke:p0:browser:real` 是**付费opt-in**：Playwright/Chromium从默认工作台输入点击完成 P0，不预置接口结果、不mock模型、不自动重跑。a310cbf 修后自然输入小样本链路通过，观察到 ID 回执及不同数据的演示/正式题分离，但未覆盖 tuple 完整切片身份，不能记整体教学质量合格；内部名可见已由用户接受。最新结果与旧样本限制见[质量与验收](QUALITY_SCORE.md)。固定8010/5183，新建`.local/p0-browser-real-*.sqlite3/json`，拒绝已有数据库，全旅程最多14次真实请求。JSON记录ID/状态/工具名/usage/provider host；失败断言可能含模型文本差异，原报告与截图/trace/数据库都留本地不提交，只发布脱敏摘要。默认CI/E2E不执行此入口，P1真实语义质量须另评估。
 
 ## 复现节点学习 Agent
 
