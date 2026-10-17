@@ -182,7 +182,7 @@ test('single workbench: late document deletion never takes over a later conversa
   const destination = page.url(); release(); await response;
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   expect(page.url()).toBe(destination);
-  await expect(page.getByRole('heading', { name: '想探索什么知识？', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /把好奇，\s*连成知识。/ })).toBeVisible();
 });
 
 test('single workbench: tools remain inside responsive workspace without reload writes', async ({ page, request }) => {

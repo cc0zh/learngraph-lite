@@ -56,7 +56,7 @@ export function GraphCanvas({ graph, selected, onSelect, compact = false }: { gr
   dagre.layout(layout);
   const nodes = graph.nodes.map(n => {
     const position = layout.node(n.id);
-    return { id: n.id, data: { label: compact ? n.title : `${n.title} · ${n.estimated_minutes} 分钟` }, position: { x: position.x - 80, y: position.y - height / 2 }, selected: selected === n.id,
+    return { id: n.id, width: 160, height, data: { label: compact ? n.title : `${n.title} · ${n.estimated_minutes} 分钟` }, position: { x: position.x - 80, y: position.y - height / 2 }, selected: selected === n.id,
       ...(compact ? { style: { width: 160, height, display: 'grid', placeItems: 'center', fontSize: 14 } } : {}) };
   });
   return <div className="graph-canvas" data-ui aria-label={compact ? '知识图谱' : '学习路线图'}><ReactFlow nodes={nodes} edges={graph.edges.map((e, i) => ({ id: String(i), source: e.source, target: e.target }))}

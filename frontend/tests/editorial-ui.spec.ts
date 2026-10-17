@@ -95,10 +95,23 @@ async function noOverflow(scope: Locator, label: string) {
 // Inspect rendered paint, not CSS variable names or implementation-specific token files.
 async function palette(page: Page) {
   return page.locator('.workbench').evaluate(root => {
-    let accent = false;
-    const bluePurple: string[] = [], brightOrangeText: string[] = [];
+    let forest = false, chartreuse = false;
+    const bluePurple: string[] = [], lowContrastText: string[] = [];
     const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
       .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    const rgba = (paint: string) => {
+      const match = paint.match(/^rgba?\(([^)]+)\)/);
+      if (!match) return [0, 0, 0, 0];
+      const values = match[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+      return [...values.slice(0, 3), values[3] ?? 1];
+    };
+    const blend = (foreground: number[], background: number[]) => foreground.slice(0, 3)
+      .map((value, index) => value * foreground[3] + background[index] * (1 - foreground[3]));
+    const background = (element: Element) => {
+      const layers: number[][] = [];
+      for (let current: Element | null = element; current; current = current.parentElement) layers.push(rgba(getComputedStyle(current).backgroundColor));
+      return layers.reverse().reduce((paint, layer) => blend(layer, paint), [255, 255, 255]);
+    };
     for (const element of [root, ...root.querySelectorAll('*')]) {
       const style = getComputedStyle(element), rect = element.getBoundingClientRect();
       if (!rect.width || !rect.height || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
@@ -112,22 +125,24 @@ async function palette(page: Page) {
       for (const paint of paints) for (const match of paint.matchAll(/rgba?\(([^)]+)\)/g)) {
         const values = match[1].split(/[,\s/]+/).filter(Boolean).map(Number), rgb = values.slice(0, 3);
         if (values.length > 3 && values[3] === 0) continue;
-        if (rgb.every((value, index) => value === [234, 76, 22][index])) accent = true;
+        if (rgb.every((value, index) => value === [37, 75, 61][index])) forest = true;
+        if (rgb.every((value, index) => value === [212, 237, 131][index])) chartreuse = true;
         const [r, g, b] = rgb.map(value => value / 255), high = Math.max(r, g, b), low = Math.min(r, g, b), delta = high - low;
         if (delta < 0.1 || delta / (high || 1) < 0.2) continue; // neutral ink/paper is not a hue violation
         let hue = high === r ? ((g - b) / delta) % 6 : high === g ? (b - r) / delta + 2 : (r - g) / delta + 4;
         hue = (hue * 60 + 360) % 360;
         if (hue >= 200 && hue <= 320) bluePurple.push(`${element.tagName}: ${paint}`);
       }
-      const text = style.color.match(/^rgba?\(([^)]+)\)/);
-      if (ownText && text) {
-        const rgb = text[1].split(/[,\s/]+/).filter(Boolean).slice(0, 3).map(Number);
-        if (rgb[0] > rgb[1] * 1.5 && rgb[1] > rgb[2] && luminance(rgb) >= luminance([234, 76, 22])) {
-          brightOrangeText.push(`${element.textContent?.trim().slice(0, 50)}: ${style.color}`);
-        }
+      // Disabled controls are exempt; other text must contrast with its actual layered background.
+      if (ownText && !element.closest(':disabled, [aria-disabled="true"]')) {
+        const paper = background(element), ink = blend(rgba(style.color), paper);
+        const light = Math.max(luminance(ink), luminance(paper)), dark = Math.min(luminance(ink), luminance(paper));
+        const ratio = (light + 0.05) / (dark + 0.05);
+        const large = parseFloat(style.fontSize) >= 24 || (parseFloat(style.fontSize) >= 18.66 && parseInt(style.fontWeight) >= 700);
+        if (ratio < (large ? 3 : 4.5)) lowContrastText.push(`${element.textContent?.trim().slice(0, 50)}: ${style.color} on rgb(${paper.join(', ')}), ${style.fontSize}, contrast ${ratio.toFixed(2)}`);
       }
     }
-    return { accent, bluePurple: [...new Set(bluePurple)], brightOrangeText: [...new Set(brightOrangeText)] };
+    return { forest, chartreuse, bluePurple: [...new Set(bluePurple)], lowContrastText: [...new Set(lowContrastText)] };
   });
 }
 
@@ -161,7 +176,7 @@ for (const viewport of viewports) {
   });
 }
 
-test('editorial: the main paper background is rgb(247,245,240)', async ({ page }) => {
+test('editorial: the canvas is rgb(244,246,243) and the left sidebar is #203d30', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.workbench')).toBeVisible();
   const canvas = await page.locator('.workbench').evaluate(element => {
@@ -171,12 +186,15 @@ test('editorial: the main paper background is rgb(247,245,240)', async ({ page }
     }
     return 'transparent';
   });
-  expect(canvas, 'The painted workbench canvas, whether supplied by the root or an ancestor').toBe('rgb(247, 245, 240)');
+  expect(canvas, 'The painted workbench canvas, whether supplied by the root or an ancestor').toBe('rgb(244, 246, 243)');
+  await expect(page.getByRole('complementary', { name: '学习空间', exact: true })).toHaveCSS('background-color', 'rgb(32, 61, 48)');
 });
 
-test('editorial: the rendered accent includes #ea4c16', async ({ page, request }) => {
+test('editorial: rendered brand paints include forest #254b3d and chartreuse #d4ed83', async ({ page, request }) => {
   await openLearning(page, request, await learningGoal(request));
-  expect((await palette(page)).accent, 'The brand orange must be rendered, not merely declared as an unused token').toBe(true);
+  const paints = await palette(page);
+  expect(paints.forest, 'Forest primary must be rendered, not merely declared as an unused token').toBe(true);
+  expect(paints.chartreuse, 'Chartreuse accent must be rendered, not merely declared as an unused token').toBe(true);
 });
 
 test('editorial: visible workbench and graph paints contain no saturated blue or purple', async ({ page, request }) => {
@@ -189,9 +207,15 @@ test('editorial: visible workbench and graph paints contain no saturated blue or
   expect([...new Set(found)], 'Blue/purple paint must be replaced by the editorial palette').toEqual([]);
 });
 
-test('editorial: orange text uses a darker tone than the brand accent', async ({ page, request }) => {
+test('editorial: text contrasts safely with the forest, chartreuse and canvas surfaces', async ({ page, request }) => {
   await openLearning(page, request, await learningGoal(request));
-  expect((await palette(page)).brightOrangeText, 'Keep bright #ea4c16 for accents; orange text needs a darker ink tone').toEqual([]);
+  expect((await palette(page)).lowContrastText, 'Normal text needs 4.5:1 contrast; large text needs 3:1').toEqual([]);
+});
+
+test('editorial: the active sidebar conversation remains readable on hover', async ({ page, request }) => {
+  await openLearning(page, request, await learningGoal(request));
+  await page.locator('.wb-spaces .wb-session[aria-current="page"]').hover();
+  expect((await palette(page)).lowContrastText, 'Selected sidebar text must keep contrast when hovered').toEqual([]);
 });
 
 test('editorial: new conversation, goal-mode switches and refresh never POST at any viewport', async ({ page, request }) => {

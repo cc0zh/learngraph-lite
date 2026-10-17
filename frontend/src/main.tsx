@@ -28,7 +28,26 @@ function App() {
   }, []);
   const learning = workbenchHref({ tool: undefined, document: undefined, chunk: undefined, source_goal: undefined, source_node: undefined });
   const documentTool = ['documents', 'document'].includes(new URLSearchParams(location.search).get('tool') || '');
-  return <><a className="skip" href="#main">跳到主要内容</a><header className="topbar"><a className="brand" href={learning}><span className="brand-name">LearnGraph</span><small>Lite</small><span className="brand-description">让知识相连，让学习继续</span></a><nav aria-label="主要导航"><a href={learning} aria-current={!documentTool ? 'page' : undefined}>我的学习</a><a href={workbenchHref({ tool: 'documents', mode: undefined, document: undefined, chunk: undefined })} aria-current={documentTool ? 'page' : undefined}>我的资料</a><span className={`model-badge ${model?.mode === 'real' ? 'real' : ''}`}>{model ? model.mode === 'fixture' ? 'Fixture · 示例模式' : model.configured ? 'Real · 模型已配置' : 'Real · 未配置' : '正在检查模型'}</span></nav></header>
+  const modelLabel = model ? model.mode === 'fixture' ? 'Fixture' : 'Real' : '检查中';
+  const modelDetail = model ? model.mode === 'fixture' ? '示例模式' : model.configured ? '模型已配置' : '未配置' : '正在检查模型';
+  return <><a className="skip" href="#main">跳到主要内容</a><header className="topbar">
+    <a className="brand" href={learning} aria-label="LearnGraph Lite · 我的学习">
+      <svg className="brand-mark" viewBox="0 0 36 36" fill="none" aria-hidden="true" focusable="false">
+        <path d="m8 26 10-16 11 13" stroke="currentColor" strokeWidth="2"/>
+        <circle cx="8" cy="26" r="4" fill="currentColor"/>
+        <circle cx="18" cy="10" r="6" fill="currentColor"/>
+        <circle cx="29" cy="23" r="5" className="brand-node"/>
+      </svg>
+      <span className="brand-name">LearnGraph</span><small>Lite</small>
+    </a>
+    <nav aria-label="主要导航">
+      <a href={learning} aria-current={!documentTool ? 'page' : undefined}>我的学习</a>
+      <a href={workbenchHref({ tool: 'documents', mode: undefined, document: undefined, chunk: undefined })} aria-current={documentTool ? 'page' : undefined}>我的资料</a>
+      <span className={`model-badge ${model?.mode === 'real' ? 'real' : ''}`} role="status" aria-label={`${modelLabel} · ${modelDetail}`} title={`${modelLabel} · ${modelDetail}`}>
+        <span className="model-label">{modelLabel}</span><span className="model-detail"> · {modelDetail}</span>
+      </span>
+    </nav>
+  </header>
     <main id="main"><ErrorBox error={error}/>{location.pathname === '/' ? <Workbench/> : <p>页面不存在。<a href="/">返回工作台</a></p>}</main></>;
 }
 createRoot(document.getElementById('root')!).render(<App/>);

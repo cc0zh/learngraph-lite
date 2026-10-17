@@ -49,6 +49,7 @@ venv/
 *.swo
 
 # Browser verification output
+.taste-skill/
 playwright-report/
 test-results/
 
