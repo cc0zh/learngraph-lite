@@ -86,7 +86,7 @@ test('taste studio: sample nodes are clearly illustrative and browsing never per
   await expect(sample.getByRole('button', { name: '开始学习此节点', exact: true })).toHaveCount(0);
   expect(new URL(page.url()).search).toBe('');
   await page.reload();
-  await expect(page.getByRole('textbox', { name: '发送消息', exact: true })).toHaveValue('');
+  await expect(page.getByRole('textbox', { name: '描述学习目标', exact: true })).toHaveValue('');
   expect(await (await request.get('/api/goals')).json()).toEqual(goals);
   expect(await (await request.get('/api/conversations')).json()).toEqual(conversations);
   expect(sent).toEqual([]);
@@ -94,7 +94,7 @@ test('taste studio: sample nodes are clearly illustrative and browsing never per
 
 test('taste studio: switching topics updates graph and detail without overwriting either unsent draft', async ({ page }) => {
   const sent = writes(page);
-  await page.goto('/');
+  await page.goto('/?mode=chat');
   const plain = page.getByRole('textbox', { name: '发送消息', exact: true });
   await plain.fill('我自己的普通问题草稿');
   await choose(page, 'Python 基础');
@@ -121,14 +121,14 @@ test('taste studio: switching topics updates graph and detail without overwritin
   await expect(page.getByLabel('描述学习目标', { exact: true })).toHaveValue('我自己的目标草稿');
   await page.reload();
   await expect(page.getByLabel('描述学习目标', { exact: true })).toHaveValue('我自己的目标草稿');
-  await page.getByRole('button', { name: '退出创建模式', exact: true }).click();
+  await page.getByRole('button', { name: '普通提问', exact: true }).click();
   await expect(plain).toHaveValue('我自己的普通问题草稿');
   expect(sent).toEqual([]);
 });
 
 test('taste studio: explicit use fills the selected topic in goal mode but does not submit or erase the plain draft', async ({ page }) => {
   const sent = writes(page);
-  await page.goto('/');
+  await page.goto('/?mode=chat');
   await page.getByRole('textbox', { name: '发送消息', exact: true }).fill('保留我的普通输入');
   await choose(page, 'Python 基础');
   await (await preview(page)).getByRole('button', { name: useTheme, exact: true }).click();
@@ -139,7 +139,7 @@ test('taste studio: explicit use fills the selected topic in goal mode but does 
   await expect(page.getByRole('button', { name: '发送并创建目标', exact: true })).toBeEnabled();
   await page.reload();
   await expect(input).toHaveValue(pythonPrompt);
-  await page.getByRole('button', { name: '退出创建模式', exact: true }).click();
+  await page.getByRole('button', { name: '普通提问', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '发送消息', exact: true })).toHaveValue('保留我的普通输入');
   expect(sent).toEqual([]);
 });
@@ -232,7 +232,7 @@ test('taste studio: a model-status read error leaves the composer and panel bott
   await page.route('**/api/model/status', route => route.fulfill({ status: 503, json: { detail: '状态暂不可用' } }));
   await page.goto('/');
   await expect(page.getByRole('alert')).toBeVisible();
-  const input = page.getByRole('textbox', { name: '发送消息', exact: true });
+  const input = page.getByRole('textbox', { name: '描述学习目标', exact: true });
   await input.fill('错误状态下仍保留的草稿');
   const submit = page.locator('.message-composer button[type=submit]');
   await submit.scrollIntoViewIfNeeded();
@@ -247,7 +247,7 @@ for (const viewport of viewports) {
     await page.setViewportSize(viewport);
     const sent = writes(page);
     await page.goto('/');
-    await expect(page.getByRole('textbox', { name: '发送消息', exact: true })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: '描述学习目标', exact: true })).toBeVisible();
     if (viewport.width <= 768) {
       await expect(page.getByLabel('当前对话范围', { exact: true })).toBeHidden();
       await expect(page.getByRole('navigation', { name: '工作台区域', exact: true })).toBeVisible();
@@ -281,8 +281,8 @@ test('taste studio: reduced motion leaves the start, switched sample and goal in
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
     await page.goto('/');
-    await noHiddenAncestors(page.getByRole('region', { name: '工作台起点', exact: true }).getByRole('heading', { level: 1 }));
-    await noHiddenAncestors(page.getByRole('textbox', { name: '发送消息', exact: true }));
+    await noHiddenAncestors(page.getByRole('region', { name: '创建目标', exact: true }).getByRole('heading', { level: 1 }));
+    await noHiddenAncestors(page.getByRole('textbox', { name: '描述学习目标', exact: true }));
     await choose(page, 'Python 基础');
     const sample = await preview(page);
     await noHiddenAncestors(sample.getByLabel('Python 基础示例图谱', { exact: true }));
@@ -349,7 +349,7 @@ test('taste studio: overview nodes paint at every width after tool navigation an
   for (const viewport of [...viewports].reverse()) {
     await page.setViewportSize(viewport);
     await page.goto('/');
-    await expect(page.getByRole('textbox', { name: '发送消息', exact: true })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: '描述学习目标', exact: true })).toBeVisible();
     await page.goto(workbenchURL(goal));
     const overview = page.getByRole('region', { name: '知识图谱全景', exact: true });
     await expect(overview).toBeVisible();

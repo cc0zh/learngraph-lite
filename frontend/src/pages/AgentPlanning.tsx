@@ -49,8 +49,8 @@ function Questions({ run, card, locked, send }: { run: Run; card: Extract<Planni
 }
 
 const continueText = '目标已由我确认，请根据已确认目标生成学习图谱，给我审核，不要发布。';
-export function AgentPlanning({ goalId, sidebarTarget, onPlanChange }: {
-  goalId: string; sidebarTarget?: HTMLElement | null; onPlanChange?: (plan: Plan) => void;
+export function AgentPlanning({ goalId, sidebarTarget, onPlanChange, onBrowsePublished }: {
+  goalId: string; sidebarTarget?: HTMLElement | null; onPlanChange?: (plan: Plan) => void; onBrowsePublished?: () => void;
 }) {
   const scope = `learngraph:planning:${goalId}`;
   const [plan, setPlan] = useState<Plan>();
@@ -204,7 +204,9 @@ export function AgentPlanning({ goalId, sidebarTarget, onPlanChange }: {
   return <div className="agent-planning agent-planning-embedded">
     <ErrorBox error={error || tasks.error || notice}/>
     <PendingRequest command={tasks.pending} checked={tasks.pendingChecked} sending={tasks.sending} readOnly={!!published} query={() => { void tasks.refresh(); void refresh(); }} resend={() => { if (!published) void tasks.recover(); }}/>
-    {published && <p className="hint">这张图谱已发布，不再调用规划模型修改。请在“图谱与节点”区域选择节点开始学习；调整通过“图谱管理”审核提案。</p>}
+    {published && <section className="hint" aria-label="图谱发布完成"><strong>图谱已准备好，可以开始学习了。</strong><p>选择一个节点进入对话；资料、教材和练习都可以稍后按需使用。调整图谱仍通过人工审核。</p>
+      {onBrowsePublished && <button type="button" onClick={onBrowsePublished}>选择节点开始学习</button>}
+    </section>}
     <div className="agent-plan-main"><section className="panel planning-dialogue" aria-label="规划对话">
       <div className="section-title"><h2>一起规划</h2><button type="button" className="quiet" disabled={saving || tasks.sending} onClick={() => { void tasks.refresh(); void refresh(); }}>刷新目标与路线</button></div>
       <p className="muted small">直接说想法、追问原因或提出调整。模型可以提出草稿，但不能替你确认目标或发布路线。</p>

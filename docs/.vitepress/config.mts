@@ -52,6 +52,7 @@ export default defineConfig({
       { text: '开始使用', items: [
         { text: '文档总览', link: '/' },
         { text: '安装与首次运行', link: '/developer/getting-started' },
+        { text: '一次完整学习体验', link: '/demo/personal-learning-experience' },
         { text: '运行模式与配置', link: '/developer/configuration' },
         { text: '常见问题与排错', link: '/developer/troubleshooting' },
       ] },

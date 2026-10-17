@@ -12,6 +12,8 @@ LearnGraph Lite 是本地单用户学习 Agent：把学习意图变成可审核�
 
 从[核心机制总览](core/index.md)按能力查阅：目标如何变成图谱、学习成绩如何产生、资料怎样进入回答、学习包如何追问，以及 Agent 任务怎样恢复。不必先读函数级调用链。
 
+想完整体验知识地图与节点学习，可参考[个人学习体验：概率与统计](demo/personal-learning-experience.md)。它提供短资料与体验路线，真实调用需单独授权；准备好的材料不等于已完成体验。
+
 ### 修改与验证功能
 
 先用[领域概念](developer/concepts.md)确认状态归属，再通过[架构与源码地图](developer/architecture.md)和[关键调用链](developer/flows.md)定位修改点，按[第一次业务改动](developer/change-guide.md)与[测试与验证](developer/testing.md)完成改动。

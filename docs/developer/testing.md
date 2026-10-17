@@ -42,6 +42,7 @@ uv run --locked python -c "import runpy; m=runpy.run_path('tests/test_learning_d
 npx.cmd playwright install chromium
 npm.cmd run test:e2e -- --list
 npm.cmd run test:e2e -- --grep "workbench:"
+npm.cmd run test:e2e -- --grep "lifecycle:"
 ```
 
 完整回归用 `npm.cmd run test:e2e`。Linux 首次安装常需 `npx playwright install --with-deps chromium`。

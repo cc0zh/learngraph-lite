@@ -14,6 +14,12 @@ LearnGraph Lite是本地单用户学习Agent Web应用。React P0/P1及统一图
 
 `ConversationService` 组合独立 SQLite 会话元数据、规划目录与旧运行只读发现；目录只归集普通 runner/teaching，不把教材/解释/提案当独立聊天。每个目标派生 `planning:{goal_id}`；learning/general 可在尚无 run 时持久存在。创建要求客户端 UUID，指纹相同幂等，变化则409。受管理会话所有 run 写入在入队前检查不可变 goal/node，普通会话不能发起教学；底层未注入目录的装配保留兼容行为。单数据库仍只支持一个 API 进程。
 
+首页默认创建学习主题，普通聊天通过显式 `mode=chat` 进入；已发布规划提供主区节点入口，已有节点会话优先继续，但不合并历史，也不因导航发起教学。`useDeletion` 保存尚未确认的删除身份及已知 session IDs，读取核对与再次确认分离；仅成功删除或 GET 确认 404 后清理本浏览器作用域草稿/命令。页面内已删 session 标记阻止迟到 POST 回执重新写回命令缓存，不替代服务端持久准入保护。
+
+生命周期通过应用层 `LifecycleRepository` 端口协调，SQLite 适配器在同连接短事务硬清聚合及专属运行记录，独立上传资料保留。锁顺序为 ConversationService 的 RLock → AgentLoop 的 Condition：检查真实活跃线程、提交删除、成功后清理 loop 内存记录，期间不准入同范围任务。SQLite 写入检查仅 ID 的 goal/session/run 删除标记，拒绝迟到重建及旧 SDK 回答缓存投影；持久化 run/submit 的准入事务复核目录与父作用域，不从 loop 锁内回调目录锁。不提供通用回收站或多进程删除协调。规划会话随主题清理，不能单删。
+
+新教材/解释子 run 保存不可变 parent_session_id 并纳入请求指纹；旧无父关系子 run 仅在主题清理时可靠归集，不猜测跨会话归属。具体删除 API 及响应不确定行为见 [API 手册](api-guide.md)。
+
 工作台目标创建使用 `POST /api/workbench/goals`：目标与首次 title 指纹在同一个 `BEGIN IMMEDIATE` 中保存；同 ID 同输入返回最新规划，旧入口已占用该 ID 或指纹变化返回409，不把新规划写入放入该事务。客户端在 POST 前保存创建身份、首轮 request_id；元数据确认后转交既有 run 恢复机制。刷新仅查询；待恢复目标不能从 fallback 发起另一首轮。429 保留原命令，确定性拒绝至少保留完整草稿，迟到成功不能清空新草稿。
 
 界面统一但 transcript 不合并：旧 runner 续聊沿用 runner，新节点会话用 teaching。节点题目、成绩、教材仍由原仓库共享；学习包生成/解释使用按 conversation 持久的子 session。解释结果与来源相邻，步骤事件可共享，但其初始 slot 每条会话独立，避免服务端 `(goal,event,slot)` 幂等键跨会话冲突。未引入跨会话长期记忆。

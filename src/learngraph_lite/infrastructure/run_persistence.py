@@ -10,6 +10,7 @@ from pathlib import Path
 import sqlite3
 
 from learngraph_lite.application.agent import RunAdmissionError, RunEvent, RunRecord, RunRequest
+from learngraph_lite.infrastructure.lifecycle_persistence import initialize_lifecycle
 
 
 def _json(value) -> str:
@@ -21,6 +22,7 @@ class SQLiteRunRepository:
     def __init__(self, database_path: str | Path):
         self._database_path = str(database_path)
         with closing(self._connect()) as connection, connection:
+            initialize_lifecycle(connection)
             connection.execute("""create table if not exists agent_runs (
                 run_id text primary key, session_id text not null, request_id text not null,
                 request_json text not null, record_json text not null,
@@ -32,6 +34,11 @@ class SQLiteRunRepository:
                 goal_id text not null, event_id text not null, slot text not null,
                 root_task_id text not null, initial_input text not null,
                 primary key(goal_id, event_id, slot))""")
+
+    def deleted_identities(self) -> tuple[frozenset[str], frozenset[str]]:
+        with closing(self._connect()) as connection:
+            return (frozenset(row[0] for row in connection.execute("select session_id from deleted_sessions")),
+                    frozenset(row[0] for row in connection.execute("select goal_id from deleted_goals")))
 
     def load(self) -> tuple[tuple[RunRequest, RunRecord, tuple[RunEvent, ...]], ...]:
         with closing(self._connect()) as connection, connection:
@@ -56,6 +63,14 @@ class SQLiteRunRepository:
     def admit(self, request: RunRequest, record: RunRecord) -> None:
         with closing(self._connect()) as connection, connection:
             connection.execute("begin immediate")
+            if (connection.execute("select 1 from deleted_sessions where session_id in (?, ?)",
+                    (request.session_id, request.parent_session_id)).fetchone()
+                    or connection.execute("select 1 from deleted_goals where goal_id=?", (request.goal_id,)).fetchone()):
+                raise RunAdmissionError("scope_deleted", "Conversation or goal was deleted; use a new identity.")
+            self._validate_directory_scope(connection, request)
+            for (raw,) in connection.execute("select request_json from agent_runs where session_id=?", (request.session_id,)):
+                if json.loads(raw).get("parent_session_id") != request.parent_session_id:
+                    raise RunAdmissionError("session_scope_conflict", "A session cannot change its parent conversation.")
             if request.source_event_id is not None:
                 # The ACK must already be durable in this same database. Lesson mutate
                 # may rewrite lesson tables; links deliberately live in a separate table.
@@ -79,6 +94,34 @@ class SQLiteRunRepository:
                         raise RunAdmissionError("invalid_retry", "retry must keep the saved explanation task/input")
             connection.execute("insert into agent_runs values (?, ?, ?, ?, ?)",
                                (record.run_id, request.session_id, request.idempotency_key, _json(request), _json(record)))
+
+    @staticmethod
+    def _validate_directory_scope(connection, request: RunRequest) -> None:
+        # SDK run/submit share this admission transaction with HTTP. Do not call
+        # ConversationService from under the loop lock (directory -> loop is the
+        # established lock order). Older standalone run stores have no directory.
+        directory = connection.execute("select 1 from sqlite_master where type='table' and name='conversations'").fetchone()
+        record = connection.execute("select kind, goal_id, node_id from conversations where session_id=?",
+                                    (request.session_id,)).fetchone() if directory else None
+        if record and (record[1:] != (request.goal_id, request.node_id)
+                       or (record[0] == "general" and request.mode != "runner")):
+            raise RunAdmissionError("conversation_scope_conflict", "Run scope must match the independent conversation.")
+        if request.parent_session_id is None:
+            return
+        parent = connection.execute("select kind, goal_id, node_id from conversations where session_id=?",
+                                    (request.parent_session_id,)).fetchone() if directory else None
+        if parent is None:
+            # Legacy ordinary/teaching runs are still independently discoverable
+            # conversations. Keep their legitimate children compatible.
+            for (raw,) in connection.execute("select request_json from agent_runs where session_id=? order by rowid",
+                                             (request.parent_session_id,)):
+                prior = json.loads(raw)
+                if prior.get("mode", "runner") in {"runner", "teaching"} and prior.get("parent_session_id") is None:
+                    parent = ("learning" if prior.get("goal_id") is not None else "general", prior.get("goal_id"), prior.get("node_id"))
+                    break
+        if (record is not None or parent != ("learning", request.goal_id, request.node_id)
+                or request.mode not in {"lesson", "exercise", "explanation"}):
+            raise RunAdmissionError("conversation_scope_conflict", "Child tasks must belong to their learning conversation.")
 
     def save(self, record: RunRecord, events: tuple[RunEvent, ...]) -> None:
         with closing(self._connect()) as connection, connection:

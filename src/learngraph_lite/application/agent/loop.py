@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from learngraph_lite.agent_core import AgentRunner, Budget, TextMessage
 from learngraph_lite.agent_core.budget import BudgetExceeded
+from learngraph_lite.application.lifecycle import DeletedScope
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "budget_exceeded", "interrupted"}
@@ -47,6 +48,7 @@ class RunRequest:
     graph_feedback: str = ""
     response_to_run_id: str | None = None
     planning_answers_json: str = ""
+    parent_session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,8 @@ class RunRecord:
 
 
 class RunRepository(Protocol):
+    def deleted_identities(self) -> tuple[frozenset[str], frozenset[str]]: ...
+
     def load(self) -> tuple[tuple[RunRequest, RunRecord, tuple[RunEvent, ...]], ...]: ...
 
     def admit(self, request: RunRequest, record: RunRecord) -> None: ...
@@ -132,7 +136,12 @@ class AgentLoop:
         self._executor: ThreadPoolExecutor | None = None
         self._closed = False
         self._explanation_roots: dict[tuple[str, str, str], str] = {}
+        self._deleted_sessions: set[str] = set()
+        self._deleted_goals: set[str] = set()
         if repository is not None:
+            sessions, goals = repository.deleted_identities()
+            self._deleted_sessions.update(sessions)
+            self._deleted_goals.update(goals)
             for request, record, events in repository.load():
                 self._register(request, record, events)
             with self._condition:
@@ -161,6 +170,14 @@ class AgentLoop:
     def _admit(self, request: RunRequest, budget: Budget) -> tuple[RunRecord, bool]:
         if self._closed:
             raise RunAdmissionError("shutting_down", "application is shutting down")
+        if (request.session_id in self._deleted_sessions or request.parent_session_id in self._deleted_sessions
+                or request.goal_id in self._deleted_goals):
+            raise RunAdmissionError("scope_deleted", "This conversation or goal was deleted; create a new identity.")
+        if request.parent_session_id == request.session_id:
+            raise RunAdmissionError("invalid_scope", "A child session cannot be its own parent.")
+        for previous in self._requests_by_key.values():
+            if previous.session_id == request.session_id and previous.parent_session_id != request.parent_session_id:
+                raise RunAdmissionError("session_scope_conflict", "A session cannot change its parent conversation.")
         planning_task = request.mode in {"planning", "clarify", "graph", "proposal"}
         if planning_task:
             if request.goal_id is None or request.node_id is not None or request.task_ref != f"goal:{request.goal_id}":
@@ -357,6 +374,46 @@ class AgentLoop:
             return tuple(_copy_record(record) for record in sorted(self._records_by_id.values(),
                          key=lambda record: record.created_at))
 
+    def delete_scope(self, commit: Callable[[], DeletedScope], *, session_id: str | None = None,
+                     goal_id: str | None = None) -> None:
+        """Serialize deletion with admission; public cancellation is not worker exit.
+
+        The durable callback must commit atomically or raise. Memory changes only
+        after its success, while admission and worker transitions remain excluded.
+        """
+        with self._condition:
+            sessions = {session_id} if session_id is not None else {f"planning:{goal_id}"}
+            if goal_id is not None:
+                sessions.update(record.session_id for record in self._records_by_id.values()
+                                if record.goal_id == goal_id)
+            while True:
+                children = {request.session_id for request in self._requests_by_key.values()
+                            if request.parent_session_id in sessions}
+                if children <= sessions:
+                    break
+                sessions.update(children)
+            runs = {record.run_id for record in self._records_by_id.values()
+                    if record.session_id in sessions or (goal_id is not None and record.goal_id == goal_id)}
+            if runs.intersection(self._active):
+                raise RunAdmissionError("session_busy", "Execution has not stopped; wait for workers to exit before deleting.")
+            deleted = commit()
+            sessions.update(deleted.session_ids)
+            runs.update(deleted.run_ids)
+            self._deleted_sessions.update(sessions)
+            if goal_id is not None:
+                self._deleted_goals.add(goal_id)
+            for key, record in tuple(self._records_by_key.items()):
+                if record.run_id in runs:
+                    del self._records_by_key[key]
+                    del self._requests_by_key[key]
+            for run_id in runs:
+                self._records_by_id.pop(run_id, None)
+                self._events_by_run.pop(run_id, None)
+            for session in sessions:
+                self._session_scopes.pop(session, None)
+            self._explanation_roots = {key: root for key, root in self._explanation_roots.items() if root not in runs}
+            self._condition.notify_all()
+
     def _record(self, run_id: str) -> RunRecord:
         if run_id not in self._records_by_id:
             raise KeyError(f"unknown run: {run_id}")
@@ -377,10 +434,12 @@ class AgentLoop:
         with self._condition:
             self._record(run_id)
             self._condition.wait_for(
-                lambda: self._cursor(run_id) > after_seq
+                lambda: run_id not in self._records_by_id or self._cursor(run_id) > after_seq
                 or self._records_by_id[run_id].status in TERMINAL_STATUSES,
                 timeout=timeout,
             )
+            if run_id not in self._records_by_id:
+                return ()
             return self.events(run_id, after_seq=after_seq)
 
     def cancel(self, run_id: str) -> RunRecord:

@@ -226,6 +226,7 @@ def _create_business_app(gateway, mode: str, database):
     from learngraph_lite.infrastructure.proposal_persistence import SQLiteProposalRepository
     from learngraph_lite.infrastructure.file_skills import FileSkillCatalog
     from learngraph_lite.infrastructure.conversation_persistence import SQLiteConversationRepository
+    from learngraph_lite.infrastructure.lifecycle_persistence import SQLiteLifecycleRepository
 
     imports = None
     try:
@@ -245,7 +246,8 @@ def _create_business_app(gateway, mode: str, database):
                 learning_service.ensure_goal(state.graph)
         context = LearningContext(planning, learning, documents, lessons, proposals, skills)
         loop = build_learning_loop(gateway, planning, learning, documents, lessons, SQLiteRunRepository(database_path), proposals, skills)
-        conversations = ConversationService(SQLiteConversationRepository(database_path), PlanningService(planning), loop)
+        conversations = ConversationService(SQLiteConversationRepository(database_path), PlanningService(planning), loop,
+                                            SQLiteLifecycleRepository(database_path))
         imports = DocumentImports(documents, SubprocessDocumentParser(), PlanningService(planning))
         return create_app(loop, model_mode=mode, model_configured=mode == "real", on_close=gateway.close,
                           learning_context=context,

@@ -19,6 +19,7 @@ from learngraph_lite.domain.documents import Citation, Document, DocumentChunk, 
 from learngraph_lite.domain.lessons import ComponentKind, LessonComponent, LessonEvent, LessonPackage
 from learngraph_lite.domain.learning import Attempt, ExerciseOption, ExercisePrivate, GoalDraft, GraphEdge, GraphNode, GraphSnapshot, GraphStatus
 from learngraph_lite.domain.learning.goals import build_goal_draft
+from learngraph_lite.infrastructure.lifecycle_persistence import initialize_lifecycle, operation_run_ids, require_live_goal, require_live_runs
 
 
 class SQLitePlanningRepository:
@@ -36,9 +37,11 @@ class SQLitePlanningRepository:
     def save(self, goal_id: str, state: PlanningState) -> None:
         with closing(self._connect()) as connection:
             with connection:
+                connection.execute("begin immediate")
                 self._save(connection, goal_id, state)
 
     def _save(self, connection, goal_id, state):
+        require_live_goal(connection, goal_id)
         connection.execute(
             """insert into planning_states(goal_id, goal_json, graph_json, clarification_round, version, questions_json)
             values (?, ?, ?, ?, ?, ?)
@@ -94,6 +97,7 @@ class SQLitePlanningRepository:
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
             with connection:
+                initialize_lifecycle(connection)
                 connection.execute(
                     """
                     create table if not exists planning_states (
@@ -183,6 +187,7 @@ class SQLiteDocumentRepository:
     def bind_to_goal(self, goal_id: str, document_id: str) -> None:
         with closing(self._connect()) as connection, connection:
             connection.execute("begin immediate")
+            require_live_goal(connection, goal_id)
             self._require_document(connection, document_id)
             connection.execute(
                 "insert or ignore into goal_document_bindings(goal_id, document_id) values (?, ?)",
@@ -192,6 +197,7 @@ class SQLiteDocumentRepository:
     def bind_to_node(self, goal_id: str, node_id: str, document_id: str) -> None:
         with closing(self._connect()) as connection, connection:
             connection.execute("begin immediate")
+            require_live_goal(connection, goal_id)
             self._require_document(connection, document_id)
             if not self._is_bound_to_goal(connection, goal_id, document_id):
                 raise DocumentAccessError("goal_binding_required", "document must be bound to goal before binding to node")
@@ -296,6 +302,7 @@ class SQLiteDocumentRepository:
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
             with connection:
+                initialize_lifecycle(connection)
                 connection.execute("""create table if not exists document_uploads (
                     document_id text primary key, filename text not null, kind text, status text not null,
                     size_bytes integer not null, content_hash text not null, revision integer not null,
@@ -471,6 +478,7 @@ class SQLiteLearningRepository:
 
     def save(self, goal_id: str, state: LearningState) -> None:
         with closing(self._connect()) as connection, connection:
+            connection.execute("begin immediate")
             self._save(connection, goal_id, state)
 
     def mutate(self, goal_id: str, update):
@@ -482,6 +490,8 @@ class SQLiteLearningRepository:
             return result
 
     def _save(self, connection: sqlite3.Connection, goal_id: str, state: LearningState) -> None:
+        require_live_goal(connection, goal_id)
+        require_live_runs(connection, (*state.run_ids_by_key.values(), *operation_run_ids(state.generation_operations)))
         connection.execute(
             """
             insert into learning_states(goal_id, graph_json, run_ids_json)
@@ -653,6 +663,7 @@ class SQLiteLearningRepository:
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
             with connection:
+                initialize_lifecycle(connection)
                 connection.execute(
                     """
                     create table if not exists learning_states (
@@ -805,6 +816,7 @@ class SQLiteLessonRepository:
 
     def save(self, goal_id: str, state: LessonState) -> None:
         with closing(self._connect()) as connection, connection:
+            connection.execute("begin immediate")
             self._save(connection, goal_id, state)
 
     def mutate(self, goal_id: str, update):
@@ -816,6 +828,8 @@ class SQLiteLessonRepository:
             return result
 
     def _save(self, connection, goal_id, state):
+        require_live_goal(connection, goal_id)
+        require_live_runs(connection, (*state.explanation_runs.values(), *operation_run_ids(state.generation_operations)))
         connection.execute("delete from lesson_packages where goal_id = ?", (goal_id,))
         connection.execute("delete from lesson_events where goal_id = ?", (goal_id,))
         connection.execute("delete from lesson_explanations where goal_id = ?", (goal_id,))
@@ -901,6 +915,7 @@ class SQLiteLessonRepository:
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
             with connection:
+                initialize_lifecycle(connection)
                 connection.execute(
                     """
                     create table if not exists lesson_packages (

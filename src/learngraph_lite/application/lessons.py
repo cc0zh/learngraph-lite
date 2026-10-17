@@ -115,7 +115,8 @@ class LessonService:
         return self._learning.submit_answer(goal_id, exercise_id, selected_option_id, attempt_id)
 
     def submit_explanation(self, session_id: str, goal_id: str, node_id: str, event_id: str,
-                           slot: str, request_id: str, retry_of_run_id: str | None = None) -> RunRecord:
+                           slot: str, request_id: str, retry_of_run_id: str | None = None,
+                           parent_session_id: str | None = None) -> RunRecord:
         """Build input exclusively from the ACK; AgentLoop admits/links before execution."""
         if not slot.strip() or len(slot) > 128:
             raise LessonError("invalid_lesson_event", "An explanation slot is required.")
@@ -154,7 +155,7 @@ class LessonService:
             text = original.user_text
         return self._loop.submit(RunRequest(session_id=session_id, user_text=text, idempotency_key=request_id,
             mode="explanation", goal_id=goal_id, node_id=node_id, source_event_id=event_id,
-            explanation_slot=slot, retry_of_run_id=retry_of_run_id))
+            explanation_slot=slot, retry_of_run_id=retry_of_run_id, parent_session_id=parent_session_id))
 
     def explain_event(self, goal_id: str, event_id: str, slot: str, request_id: str) -> str:
         """Legacy synchronous offline demo cache; HTTP uses submit_explanation instead."""

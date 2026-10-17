@@ -11,6 +11,7 @@ from uuid import UUID
 
 from learngraph_lite.application.agent import AgentLoop, RunRecord
 from learngraph_lite.application.planning import PlanningService, PlanningState
+from learngraph_lite.application.lifecycle import LifecycleRepository
 from learngraph_lite.domain.learning import GraphStatus, build_goal_draft
 
 
@@ -50,10 +51,12 @@ class ConversationRepository(Protocol):
 
 
 class ConversationService:
-    def __init__(self, repository: ConversationRepository, planning: PlanningService, loop: AgentLoop):
+    def __init__(self, repository: ConversationRepository, planning: PlanningService, loop: AgentLoop,
+                 lifecycle: LifecycleRepository | None = None):
         self._repository = repository
         self._planning = planning
         self._loop = loop
+        self._lifecycle = lifecycle
         # Creation and admission share a process-local boundary, including the first
         # unmanaged run. Never hold a SQLite transaction while submitting/executing.
         self._lock = RLock()
@@ -142,9 +145,16 @@ class ConversationService:
             raise ConversationError("invalid_conversation", "A client-generated UUID is required.") from exc
 
     def admit(self, session_id: str, goal_id: str | None, node_id: str | None, mode: str,
-              submit: Callable[[], T]) -> T:
+              submit: Callable[[], T], parent_session_id: str | None = None) -> T:
         """Check immutable directory scope before any run enters its queue."""
         with self._lock:
+            if parent_session_id is not None:
+                parent = self.get(parent_session_id)
+                if (parent.kind != "learning" or (parent.goal_id, parent.node_id) != (goal_id, node_id)
+                        or mode not in {"lesson", "exercise", "explanation"}):
+                    raise ConversationError("conversation_scope_conflict", "Child tasks must match their learning conversation.")
+                if any(record.session_id == session_id for record in self.list()):
+                    raise ConversationError("conversation_scope_conflict", "An independent conversation cannot become a child session.")
             if session_id.startswith("planning:"):
                 if (mode not in {"planning", "clarify", "graph"}
                         or session_id != f"planning:{goal_id}" or node_id is not None):
@@ -156,3 +166,17 @@ class ConversationService:
                 if record.kind == "general" and mode != "runner":
                     raise ConversationError("conversation_scope_conflict", "General conversations cannot run teaching tasks.")
             return submit()
+
+    def delete(self, session_id: str) -> None:
+        with self._lock:
+            if session_id.startswith("planning:"):
+                raise ConversationError("planning_conversation", "Planning conversations belong to a goal; delete the goal instead.")
+            if self._lifecycle is None:
+                raise ConversationError("lifecycle_not_configured", "Conversation deletion is not configured.")
+            self._loop.delete_scope(lambda: self._lifecycle.delete_conversation(session_id), session_id=session_id)
+
+    def delete_goal(self, goal_id: str, expected_version: int) -> None:
+        with self._lock:
+            if self._lifecycle is None:
+                raise ConversationError("lifecycle_not_configured", "Goal deletion is not configured.")
+            self._loop.delete_scope(lambda: self._lifecycle.delete_goal(goal_id, expected_version), goal_id=goal_id)

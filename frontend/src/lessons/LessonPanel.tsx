@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api, sessionFor, terminal } from '../api';
 import { ErrorBox, PendingRequest, RunCitations, RunStatus } from '../components';
 import { Citations } from '../documents';
@@ -13,6 +13,7 @@ import { validComponent } from './types';
 import './lessons.css';
 
 type Tasks = ReturnType<typeof useRuns>;
+const ParentConversation = createContext<string | undefined>(undefined);
 const readonly = (lesson: PublicLesson) => lesson.schema_version !== 1 || lesson.outdated;
 const eventScope = (lesson: PublicLesson, componentId: string) => `learngraph:lesson:${lesson.goal_id}:${lesson.id}:${lesson.version}:${componentId}`;
 
@@ -21,6 +22,7 @@ function Explanation({ lesson, componentId, sourceEvent, tasks, session, inlineE
   inlineExplanation: boolean; sourceLabel: string;
   onAcknowledged?: (event: SavedEvent) => void;
 }) {
+  const parent = useContext(ParentConversation);
   // A step transition is a new logical explanation. Explicit re-explanation alone changes its slot.
   const key = `${eventScope(lesson, componentId)}:explanation:${sourceEvent?.event_id || 'component'}${inlineExplanation ? `:${session}` : ''}`;
   const [link, saveLink] = useSaved<ExplanationLink | undefined>(key, undefined);
@@ -53,6 +55,7 @@ function Explanation({ lesson, componentId, sourceEvent, tasks, session, inlineE
       const existing = !again && latest ? commandFor(latest.run_id) : undefined;
       await tasks.execute(existing || { path: `/sessions/${session}/runs`, body: {
         request_id: current.requestId, mode: 'explanation', goal_id: lesson.goal_id, node_id: lesson.node_id,
+        ...(parent ? { parent_session_id: parent } : {}),
         source_event_id: current.event.event_id, explanation_slot: current.slot,
       } });
     } catch (e) { setError(`事件尚未确认：${String(e)}。请显式重试保存，未调用 Agent。`); }
@@ -164,7 +167,7 @@ interface LessonPanelProps { goalId: string; nodeId: string; conversationId?: st
 export function LessonPanel(props: LessonPanelProps) {
   // useRuns/useSaved retain scope-specific state; changing conversations must not
   // briefly expose or recover the previous conversation's commands or transcript.
-  return <LessonPanelContent key={`${props.goalId}:${props.nodeId}:${props.conversationId || ''}`} {...props}/>;
+  return <ParentConversation.Provider value={props.conversationId}><LessonPanelContent key={`${props.goalId}:${props.nodeId}:${props.conversationId || ''}`} {...props}/></ParentConversation.Provider>;
 }
 
 function LessonPendingRequest({ tasks, inlineExplanation, locked = false, query, resend }: {
@@ -230,7 +233,7 @@ function LessonPanelContent({ goalId, nodeId, conversationId, refreshKey = 0, on
     ++queryVersion.current;
     generationBaseline.current = lessons[0]?.version || 0;
     latestRequested.current = true;
-    await generation.execute({ path: `/goals/${goalId}/nodes/${nodeId}/lessons`, body: { session_id: generationSession, request_id: crypto.randomUUID(), purpose: '学习当前节点', exercise_ids: chosen.slice(0, 3) } });
+    await generation.execute({ path: `/goals/${goalId}/nodes/${nodeId}/lessons`, body: { session_id: generationSession, request_id: crypto.randomUUID(), purpose: '学习当前节点', exercise_ids: chosen.slice(0, 3), ...(conversationId ? { parent_session_id: conversationId } : {}) } });
   }
   const latestGeneration = generation.runs.filter(run => run.mode === 'lesson').at(-1);
   // Recovery belongs to its original package, not whichever version is currently selected.

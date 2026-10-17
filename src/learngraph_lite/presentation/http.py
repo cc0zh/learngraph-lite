@@ -82,6 +82,7 @@ class SubmitRun(BaseModel):
     retry_of_run_id: Identifier | None = None
     source_event_id: Identifier | None = None
     explanation_slot: Identifier | None = None
+    parent_session_id: Identifier | None = None
 
     @field_validator("user_text")
     @classmethod
@@ -349,6 +350,7 @@ class SubmitExercises(BaseModel):
     count: int = Field(default=1, strict=True, ge=1, le=3)
     purpose: str = Field(default="practice", strict=True, min_length=1, max_length=2000)
     retry_of_run_id: Identifier | None = None
+    parent_session_id: Identifier | None = None
 
 
 class SubmitAnswer(BaseModel):
@@ -361,6 +363,7 @@ class SubmitLesson(LessonInput):
     session_id: Identifier
     request_id: Identifier
     retry_of_run_id: Identifier | None = None
+    parent_session_id: Identifier | None = None
 
 
 class SubmitLessonEvent(BaseModel):
@@ -472,7 +475,7 @@ def create_app(
         if conversations is None:
             return loop.submit(request)
         return conversations.admit(request.session_id, request.goal_id, request.node_id, request.mode,
-                                   lambda: loop.submit(request))
+                                   lambda: loop.submit(request), request.parent_session_id)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -513,7 +516,7 @@ def create_app(
     async def admission_error(request: Request, exc: RunAdmissionError):
         status = {"session_busy": 409, "capacity_exceeded": 429, "idempotency_conflict": 409,
                   "shutting_down": 503, "storage_unavailable": 503, "invalid_scope": 422, "session_scope_conflict": 409,
-                  "invalid_retry": 409, "planning_response_used": 409}
+                  "invalid_retry": 409, "planning_response_used": 409, "scope_deleted": 409}
         return _error(
             status[exc.code], exc.code, str(exc),
             retryable=exc.code in {"session_busy", "capacity_exceeded", "shutting_down"},
@@ -629,6 +632,16 @@ def create_app(
         @app.get("/api/conversations/{session_id}", response_model=PublicConversation)
         def get_conversation(session_id: Identifier):
             return conversations.get(session_id)
+
+        @app.delete("/api/conversations/{session_id}")
+        def delete_conversation(session_id: Identifier):
+            conversations.delete(session_id)
+            return {"deleted": True, "session_id": session_id}
+
+        @app.delete("/api/goals/{goal_id}")
+        def delete_goal(goal_id: Identifier, body: PlanningVersion):
+            conversations.delete_goal(goal_id, body.expected_version)
+            return {"deleted": True, "goal_id": goal_id}
 
         @app.post("/api/conversations", status_code=201, response_model=PublicConversation)
         def create_conversation(body: CreateConversation):
@@ -766,7 +779,7 @@ def create_app(
                 session_id=body.session_id, user_text="生成练习", idempotency_key=body.request_id,
                 mode="exercise", goal_id=goal_id, node_id=node_id,
                 exercise_count=body.count, exercise_purpose=body.purpose,
-                retry_of_run_id=body.retry_of_run_id,
+                retry_of_run_id=body.retry_of_run_id, parent_session_id=body.parent_session_id,
             )))
 
         @app.get("/api/goals/{goal_id}/nodes/{node_id}/exercises")
@@ -789,6 +802,7 @@ def create_app(
                 session_id=body.session_id, user_text="生成学习页", idempotency_key=body.request_id,
                 mode="lesson", goal_id=goal_id, node_id=node_id, lesson_purpose=body.purpose,
                 lesson_exercise_ids=tuple(body.exercise_ids), retry_of_run_id=body.retry_of_run_id,
+                parent_session_id=body.parent_session_id,
             )))
 
         @app.get("/api/goals/{goal_id}/nodes/{node_id}/lessons")
@@ -875,14 +889,16 @@ def create_app(
                 return _error(409, "explanation_not_configured", "Lesson explanations are not configured.")
             def explain():
                 return lesson_events.submit_explanation(session_id, body.goal_id, body.node_id,
-                    body.source_event_id, body.explanation_slot, body.request_id, body.retry_of_run_id)
-            return public_run(conversations.admit(session_id, body.goal_id, body.node_id, body.mode, explain)
+                    body.source_event_id, body.explanation_slot, body.request_id, body.retry_of_run_id,
+                    body.parent_session_id)
+            return public_run(conversations.admit(session_id, body.goal_id, body.node_id, body.mode, explain,
+                                                  body.parent_session_id)
                               if conversations is not None else explain())
         record = submit(RunRequest(
             session_id=session_id, user_text=body.user_text, idempotency_key=body.request_id,
             goal_id=body.goal_id, node_id=body.node_id,
             mode=body.mode, retry_of_run_id=body.retry_of_run_id,
-            stream=True,
+            stream=True, parent_session_id=body.parent_session_id,
         ))
         return public_run(record)
 
@@ -920,9 +936,15 @@ def create_app(
             if record.status in TERMINAL_STATUSES:
                 return
             while not await request.is_disconnected():
-                events = await asyncio.to_thread(loop.wait_events, run_id, cursor, heartbeat_seconds)
+                try:
+                    events = await asyncio.to_thread(loop.wait_events, run_id, cursor, heartbeat_seconds)
+                except KeyError:
+                    return  # The completed scope may have been deleted since subscription.
                 if events and events[0].seq > cursor + 1:
-                    latest, cursor = loop.snapshot(run_id)
+                    try:
+                        latest, cursor = loop.snapshot(run_id)
+                    except KeyError:
+                        return
                     yield encode_snapshot(latest, cursor)
                     if latest.status in TERMINAL_STATUSES:
                         return
@@ -931,7 +953,10 @@ def create_app(
                     yield encode_sse(event)
                     cursor = event.seq
                 # Read status and cursor together so a concurrent terminal event cannot be skipped.
-                latest, latest_seq = loop.snapshot(run_id)
+                try:
+                    latest, latest_seq = loop.snapshot(run_id)
+                except KeyError:
+                    return
                 if latest.status in TERMINAL_STATUSES and cursor >= latest_seq:
                     return
                 if not events:

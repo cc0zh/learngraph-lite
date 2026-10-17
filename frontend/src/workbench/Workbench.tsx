@@ -11,15 +11,16 @@ import { GraphManagement } from './GraphManagement';
 import { KnowledgePreview, knowledgeExamples } from './KnowledgePreview';
 import { KnowledgeOverview } from './KnowledgeOverview';
 import { navigateWorkbench, workbenchHref, workbenchHistoryIndex } from './navigation';
+import { forgetDeleted, useDeletion } from './useDeletion';
 import './workbench.css';
 
-interface Location { goal?: string; session?: string; creating: boolean; tool?: string; document?: string; sourceGoal?: string; sourceNode?: string; node?: string; query?: string }
+interface Location { goal?: string; session?: string; creating: boolean; chatting?: boolean; tool?: string; document?: string; sourceGoal?: string; sourceNode?: string; node?: string; query?: string }
 interface Creation { kind: 'goal' | 'learning' | 'general'; id: string; title: string; prompt?: string; goal?: string; node?: string; request: string }
 const creationKey = 'learngraph:workbench:creation';
 const goalDraftKey = 'learngraph:workbench:goal-draft';
 function locationState(): Location {
   const params = new URLSearchParams(window.location.search);
-  return { goal: params.get('goal') || undefined, session: params.get('session') || undefined, creating: params.get('mode') === 'goal',
+  return { goal: params.get('goal') || undefined, session: params.get('session') || undefined, creating: params.get('mode') === 'goal', chatting: params.get('mode') === 'chat',
     tool: params.get('tool') || undefined, document: params.get('document') || undefined,
     sourceGoal: params.has('source_goal') ? params.get('source_goal')! : undefined, sourceNode: params.has('source_node') ? params.get('source_node')! : undefined,
     node: params.get('node') || undefined, query: window.location.search };
@@ -55,16 +56,18 @@ export function Workbench() {
   const historyPosition = useRef(workbenchHistoryIndex());
   const restoringHistory = useRef(false);
   const authorizedNavigation = useRef(false);
+  const deletedGoals = useRef(new Set<string>());
+  const deletedSessions = useRef(new Set<string>());
   const refresh = useCallback(async () => {
     const version = ++query.current;
     try {
       const [goals, sessions] = await Promise.all([api<Plan[]>('/goals'), api<Conversation[]>('/conversations')]);
       if (version !== query.current) return;
-      setPlans(previous => goals.map(goal => {
+      setPlans(previous => goals.filter(goal => !deletedGoals.current.has(goal.goal_id)).map(goal => {
         const existing = previous?.find(item => item.goal_id === goal.goal_id);
         return existing && existing.version > goal.version ? existing : goal;
       }));
-      setConversations(sessions); setLoading(false); setError('');
+      setConversations(sessions.filter(item => !deletedSessions.current.has(item.session_id) && !deletedGoals.current.has(item.goal_id || ''))); setLoading(false); setError('');
     } catch (e) { if (version === query.current) { setError(`读取学习空间失败：${String(e)}`); setLoading(false); } }
   }, []);
   useEffect(() => { void refresh(); return () => { ++query.current; }; }, [refresh]);
@@ -95,6 +98,7 @@ export function Workbench() {
     if (next.goal) params.set('goal', next.goal);
     if (next.session) params.set('session', next.session);
     if (next.creating) params.set('mode', 'goal');
+    else if (next.chatting) params.set('mode', 'chat');
     if (navigateWorkbench(`/${params.size ? `?${params}` : ''}`)) { setMobilePanel('main'); setNotice(''); }
   }
   function openTool(tool?: string, node?: string) {
@@ -110,8 +114,43 @@ export function Workbench() {
   const planning = !route.creating && !!goalId && (active?.kind === 'planning' || route.session === `planning:${goalId}`);
   const currentNode = active?.node_id ? plan?.graph?.nodes.find(item => item.id === active.node_id) : undefined;
   const viewedNode = plan?.graph?.nodes.find(item => item.id === browsed);
+  const deletion = useDeletion(deleted => {
+    const location = locationState();
+    const focused = conversations.find(value => value.session_id === location.session);
+    ++query.current;
+    forgetDeleted(deleted, conversations);
+    if (deleted.kind === 'goal') {
+      deletedGoals.current.add(deleted.id);
+      setPlans(items => items?.filter(value => value.goal_id !== deleted.id));
+      setConversations(items => items.filter(value => value.goal_id !== deleted.id));
+    } else {
+      deletedSessions.current.add(deleted.id);
+      setConversations(items => items.filter(value => value.session_id !== deleted.id));
+    }
+    const creation = readCreation();
+    if (creation && (creation.id === deleted.id || (deleted.kind === 'goal' && creation.goal === deleted.id))) {
+      localStorage.removeItem(creationKey); setPending(undefined);
+    }
+    const current = deleted.kind === 'goal' ? location.goal === deleted.id || focused?.goal_id === deleted.id : location.session === deleted.id;
+    if (current) {
+      toolDirty.current = false;
+      navigate({ goal: deleted.kind === 'conversation' ? deleted.goalId : undefined, creating: false });
+    }
+    setNotice(deleted.kind === 'goal' ? `已清理主题「${deleted.title}」。原始上传资料和其他主题保留。` : `已删除会话「${deleted.title}」。节点共享内容和成绩保留。`);
+    void refresh();
+  }, () => { setMobilePanel('main'); void refresh(); });
+  const deletionBlocked = !route.creating && !!deletion.pending && (deletion.pending.kind === 'goal'
+    ? goalId === deletion.pending.id : route.session === deletion.pending.id);
+  function deleteGoal(value: Plan) {
+    void deletion.remove({ kind: 'goal', id: value.goal_id, title: value.goal.title, version: value.version, published: value.graph?.status === 'published',
+      sessionIds: conversations.filter(item => item.goal_id === value.goal_id).map(item => item.session_id) });
+  }
+  function deleteConversation(value: Conversation) {
+    void deletion.remove({ kind: 'conversation', id: value.session_id, title: value.title, goalId: value.goal_id || undefined });
+  }
   useEffect(() => { setBrowsed(route.node || active?.node_id || ''); }, [goalId, active?.session_id, active?.node_id, route.node]);
   const onPlanChange = useCallback((value: Plan) => {
+    if (deletedGoals.current.has(value.goal_id)) return;
     setPlans(previous => {
       const current = previous?.find(item => item.goal_id === value.goal_id);
       if (current && current.version > value.version) return previous;
@@ -144,7 +183,7 @@ export function Workbench() {
     }
   }
   async function create(command: Creation) {
-    if (creationLock.current) return;
+    if (creationLock.current || deletion.busy) return;
     creationLock.current = true; setCreating(true); setError(''); setNotice('');
     const origin = navigation.current;
     setPending(command); localStorage.setItem(creationKey, JSON.stringify(command));
@@ -186,7 +225,7 @@ export function Workbench() {
   }
   function startLearning(nodeId: string) {
     const node = plan?.graph?.nodes.find(item => item.id === nodeId);
-    if (!node || !goalId || pending || creating) return;
+    if (!node || !goalId || pending || creating || deletion.busy || deletionBlocked) return;
     void create({ kind: 'learning', id: crypto.randomUUID(), goal: goalId, node: node.id,
       title: `${node.title} · 第 ${conversations.filter(value => value.kind === 'learning' && value.goal_id === goalId && value.node_id === node.id).length + 1} 次学习`, prompt: `请围绕「${node.title}」开始本次学习，先介绍核心概念并用一个具体例子讲解。`, request: crypto.randomUUID() });
   }
@@ -207,11 +246,11 @@ export function Workbench() {
     requestAnimationFrame(() => document.getElementById('workbench-initial-input')?.focus());
   }
   function emptyComposer() {
-    const isGoal = route.creating;
+    const isGoal = !route.chatting;
     const value = isGoal ? draft : plainText;
     return <section className="wb-start" aria-label={isGoal ? '创建目标' : '工作台起点'}>
       <div className="wb-start-intro">
-        <h1>{isGoal ? <>一个想法，<br/>一张新图谱。</> : <>把好奇，<br/>连成知识。</>}</h1>
+        <h1>{route.creating ? <>一个想法，<br/>一张新图谱。</> : <>把好奇，<br/>连成知识。</>}</h1>
         <p>{isGoal ? '说说你想学什么。学习助手帮你梳理范围，目标与图谱由你确认。' : '从一个问题出发，与学习助手一起梳理知识，再沿着节点逐步深入。'}</p>
       </div>
       <MessageComposer id="workbench-initial-input" label={isGoal ? '描述学习目标' : '发送消息'} value={value} onSubmit={() => { if (!value.trim() || pending) return;
@@ -220,9 +259,9 @@ export function Workbench() {
         if (isGoal) { setDraft(next); localStorage.setItem(goalDraftKey, next); }
         else { setPlainText(next); localStorage.setItem('learngraph:workbench:plain-draft', next); }
       }} placeholder={isGoal ? '例如：我会 Python，想系统理解 RAG…' : '你想弄懂什么？从一个问题开始…'}
-        disabled={creating || !!pending || !value.trim()} submitLabel={creating ? '正在创建…' : isGoal ? '发送并创建目标' : '发送消息'}
+        disabled={creating || deletion.busy || !!pending || !value.trim()} submitLabel={creating ? '正在创建…' : isGoal ? '发送并创建目标' : '发送消息'}
         note={isGoal ? '发送后创建目标并开始规划。目标确认与图谱发布始终由你决定。' : '普通提问不绑定图谱。想梳理完整的知识结构？切换到创建目标。'}>
-        <button type="button" className={isGoal ? 'selected composer-mode' : 'quiet composer-mode'} aria-pressed={isGoal} onClick={() => isGoal ? navigate({ ...route, creating: false }) : goalMode()}><Icon name="plus"/>{isGoal ? '退出创建模式' : '创建目标'}</button>
+        <button type="button" className="quiet composer-mode" onClick={() => isGoal ? navigate({ creating: false, chatting: true }) : goalMode()}><Icon name={isGoal ? 'chat' : 'plus'}/>{isGoal ? '普通提问' : '创建目标'}</button>
       </MessageComposer>
       <div className="wb-topic-picker"><p>也可以，从一个主题开始</p><div role="group" aria-label="探索知识示例">{knowledgeExamples.map((item, index) => <button type="button" className="quiet" key={item.short} aria-pressed={example === index} onClick={() => chooseExample(index)}>{item.title}<Icon name="chevron"/></button>)}</div></div>
       {!!plans?.length && <section className="wb-recent" aria-label="继续探索"><div className="section-title"><h2>继续探索</h2><span>{plans.length} 个学习目标</span></div>{plans.slice(-2).reverse().map(item => <button type="button" key={item.goal_id} onClick={() => navigate({ goal: item.goal_id, creating: false })}><span className="knowledge-dot" aria-hidden="true"/><span>{item.goal.title}</span><small>{item.graph?.status === 'published' ? `${item.graph.nodes.length} 个节点` : '继续规划'}</small><Icon name="chevron"/></button>)}</section>}
@@ -247,7 +286,8 @@ export function Workbench() {
     }}>{title}</button>)}</nav>
     <aside className={`wb-spaces wb-mobile-${mobilePanel === 'spaces' ? 'show' : 'hide'}`} aria-label="学习空间">
       <div className="section-title"><h2>学习空间</h2><button className="quiet icon-button" aria-label="刷新" title="刷新学习空间" onClick={() => { void refresh(); }}><Icon name="refresh"/></button></div>
-      <button className="wb-new-chat quiet" onClick={() => navigate({ creating: false })}><Icon name="plus"/>新对话</button>
+      <button className="wb-new-chat quiet" onClick={() => navigate({ creating: true })}><Icon name="plus"/>新学习主题</button>
+      <button className="quiet wb-plain-chat" onClick={() => navigate({ creating: false, chatting: true })}><Icon name="chat"/>新对话</button>
       {loading && <p role="status">正在读取图谱与会话…</p>}
       {!loading && !plans?.length && <div className="wb-directory-empty"><Icon name="folder"/><p>你的知识，<br/>会在这里慢慢积累。</p><span>创建目标后，图谱与学习对话会保存在这里。</span></div>}
       {(['published', 'draft'] as const).map(status => {
@@ -257,30 +297,37 @@ export function Workbench() {
             <summary title={item.goal.title} onKeyDown={event => { if (event.key === ' ') event.stopPropagation(); }}><Icon name="chevron"/><Icon name="folder"/><span>{item.goal.title}</span></summary>
             <div className="wb-goal-items">
             <button className="quiet wb-space-open" aria-current={goalId === item.goal_id && !route.session ? 'page' : undefined} onClick={() => navigate({ goal: item.goal_id, creating: false })}>{item.graph ? '查看图谱' : '查看目标'}</button>
-            {conversations.filter(value => value.goal_id === item.goal_id).map(value => <button key={value.session_id} className={`wb-session ${route.session === value.session_id && !route.creating ? 'selected' : 'quiet'}`} aria-current={route.session === value.session_id && !route.creating ? 'page' : undefined}
+            <button className="quiet wb-delete-goal" disabled={creating || deletion.busy || !!deletion.pending} aria-label={`${status === 'published' ? '删除图谱' : '放弃目标'}：${item.goal.title}`} onClick={() => deleteGoal(item)}>{status === 'published' ? '删除图谱' : '放弃目标'}</button>
+            {conversations.filter(value => value.goal_id === item.goal_id).map(value => <div className="wb-session-row" key={value.session_id}><button className={`wb-session ${route.session === value.session_id && !route.creating ? 'selected' : 'quiet'}`} aria-current={route.session === value.session_id && !route.creating ? 'page' : undefined}
               onClick={() => openConversation(value)}><Icon name="chat"/><span className="wb-session-content"><span className="wb-session-title" title={value.kind === 'planning' ? '目标创建对话' : value.title}>{value.kind === 'planning' ? '目标创建对话' : value.title}</span>
-              <small>{value.kind === 'learning' ? `节点：${item.graph?.nodes.find(node => node.id === value.node_id)?.title || value.node_id}` : value.kind === 'planning' ? item.graph?.status === 'published' ? '已完成 · 只读' : '继续创建' : '普通对话'}</small></span>{value.kind === 'learning' && <time dateTime={value.created_at} title={createdLabel(value)}>{new Date(value.created_at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</time>}</button>)}
+              <small>{value.kind === 'learning' ? `节点：${item.graph?.nodes.find(node => node.id === value.node_id)?.title || value.node_id}` : value.kind === 'planning' ? item.graph?.status === 'published' ? '已完成 · 只读' : '继续创建' : '普通对话'}</small></span>{value.kind === 'learning' && <time dateTime={value.created_at} title={createdLabel(value)}>{new Date(value.created_at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</time>}</button>
+              {value.kind !== 'planning' && <button type="button" className="quiet wb-delete-session" aria-label={`删除会话：${value.title}`} title="删除会话" disabled={creating || deletion.busy || !!deletion.pending} onClick={() => deleteConversation(value)}>×</button>}</div>)}
             </div>
           </details>)}
         </section>;
       })}
-      {!!conversations.filter(value => value.kind === 'general').length && <section className="wb-space-group"><h3>其他对话</h3>{conversations.filter(value => value.kind === 'general').map(value => <button key={value.session_id} className={route.session === value.session_id ? 'wb-session selected' : 'wb-session quiet'} aria-current={route.session === value.session_id ? 'page' : undefined} onClick={() => openConversation(value)}><Icon name="chat"/><span className="wb-session-content"><span className="wb-session-title" title={value.title}>{value.title}</span></span></button>)}</section>}
+      {!!conversations.filter(value => value.kind === 'general').length && <section className="wb-space-group"><h3>其他对话</h3>{conversations.filter(value => value.kind === 'general').map(value => <div className="wb-session-row" key={value.session_id}><button className={route.session === value.session_id ? 'wb-session selected' : 'wb-session quiet'} aria-current={route.session === value.session_id ? 'page' : undefined} onClick={() => openConversation(value)}><Icon name="chat"/><span className="wb-session-content"><span className="wb-session-title" title={value.title}>{value.title}</span></span></button><button type="button" className="quiet wb-delete-session" aria-label={`删除会话：${value.title}`} title="删除会话" disabled={creating || deletion.busy || !!deletion.pending} onClick={() => deleteConversation(value)}>×</button></div>)}</section>}
       <div className="wb-space-footer"><Icon name="book"/><span>属于你的学习空间<small>本机保存，随时继续</small></span></div>
     </aside>
     <section className={`wb-main wb-mobile-${mobilePanel === 'main' ? 'show' : 'hide'}`} aria-label="对话与学习内容">
-      <ErrorBox error={error || (scopeMismatch ? '链接中的图谱与会话范围不一致。请从左侧重新打开这条对话。' : '')}/>{notice && <p className="hint" role="status">{notice}</p>}
+      <ErrorBox error={error || (!deletion.pending ? deletion.error : '') || (scopeMismatch ? '链接中的图谱与会话范围不一致。请从左侧重新打开这条对话。' : '')}/>{notice && <p className="hint" role="status">{notice}</p>}
+      {deletion.pending && <section className="hint" aria-label="删除状态"><strong>{deletion.busy ? '正在核对或删除' : deletion.checked ? '记录仍存在，尚未删除' : '删除结果需要核对'}：{deletion.pending.title}</strong>
+        <p>刷新不会重发删除。请先查询；只有确认仍存在后，才可以重新确认删除。</p>
+        <ErrorBox error={deletion.error}/>
+        <div className="actions"><button className="quiet" disabled={deletion.busy} onClick={() => { void deletion.query(); }}>查询删除结果</button><button disabled={deletion.busy || !deletion.checked} onClick={() => { if (deletion.pending) void deletion.remove(deletion.pending); }}>重新确认删除</button></div>
+      </section>}
       {route.tool && <div className="wb-tool-heading"><p className="scope-label">工作台 · {route.tool === 'graph' ? '图谱管理' : '学习资料'}</p><button className="quiet" onClick={() => openTool()}>返回对话与学习</button></div>}
       {pending && <section className="hint" aria-label="创建恢复"><strong>有一项创建尚未确认</strong><p>{pending.title}</p><p>刷新只读取状态。继续会复用原创建标识和请求，不重复创建。</p>
         <button disabled={creating} onClick={() => { void create(pending); }}>继续本次创建</button><button className="quiet" onClick={() => { void refresh(); }}>查询学习空间</button></section>}
-      {scopeMismatch ? null : route.tool === 'document' && route.document ? <DocumentDetail key={`${route.document}:${route.query}`} documentId={route.document} query={route.query}/>
+      {scopeMismatch ? null : deletionBlocked ? <p className="hint">请先核对这条记录的删除结果，或从学习空间打开其他内容。</p> : route.tool === 'document' && route.document ? <DocumentDetail key={`${route.document}:${route.query}`} documentId={route.document} query={route.query}/>
         : route.tool === 'documents' ? <section aria-label="工作台资料管理">{documentGoal && <div className="wb-bindings"><DocumentBindings key={`goal:${documentGoal}`} goalId={documentGoal} refreshToken={documentsVersion} onChanged={documentsChanged}/>{documentNode && <DocumentBindings key={`node:${documentGoal}:${documentNode}`} goalId={documentGoal} nodeId={documentNode} refreshToken={documentsVersion} onChanged={documentsChanged}/>}</div>}<Documents onChanged={documentsChanged}/></section>
           : route.tool === 'graph' ? goalId ? <GraphManagement key={goalId} goalId={goalId} onPlanChange={onPlanChange} onDirtyChange={value => { toolDirty.current = value; }}/>
             : <p className="hint">请先选择一个目标，再管理图谱。</p>
           : route.tool ? <p className="hint">未知工具，请返回对话与学习。</p>
-        : route.creating ? emptyComposer() : creationBlocked ? <p className="hint">请先通过上方“继续本次创建”恢复原请求；恢复前不会从这里发起替代的首轮。</p> : planning && goalId ? <AgentPlanning key={goalId} goalId={goalId} sidebarTarget={sidebarTarget} onPlanChange={onPlanChange}/>
+        : route.creating ? emptyComposer() : creationBlocked ? <p className="hint">请先通过上方“继续本次创建”恢复原请求；恢复前不会从这里发起替代的首轮。</p> : planning && goalId ? <AgentPlanning key={goalId} goalId={goalId} sidebarTarget={sidebarTarget} onPlanChange={onPlanChange} onBrowsePublished={() => navigate({ goal: goalId, creating: false })}/>
         : active ? <WorkbenchConversation key={active.session_id} conversation={active} onChanged={refresh} onBrowse={nodeId => { setBrowsed(nodeId); setRailHidden(false); setMobilePanel('graph'); }}/>
           : route.session && !loading ? <div className="wb-empty"><h2>未找到这条会话</h2><p>请刷新学习空间，或从左侧选择已保存对话；不会自动创建替代会话。</p></div>
-            : plan ? <KnowledgeOverview plan={plan} selected={browsed} onBrowse={id => { setBrowsed(id); setRailHidden(false); setMobilePanel('graph'); }} onPlanning={() => navigate({ goal: plan.goal_id, session: `planning:${plan.goal_id}`, creating: false })}/> : goalId && !loading ? <div className="wb-empty"><h2>未找到这张图谱</h2><p>请从左侧选择已保存的学习空间，不会自动创建新目标。</p></div> : !loading && emptyComposer()}
+            : plan ? <KnowledgeOverview plan={plan} selected={browsed} conversations={conversations} disabled={creating || !!pending || deletion.busy} onSelect={setBrowsed} onStart={startLearning} onContinue={openConversation} onBrowse={id => { setBrowsed(id); setRailHidden(false); setMobilePanel('graph'); }} onPlanning={() => navigate({ goal: plan.goal_id, session: `planning:${plan.goal_id}`, creating: false })}/> : goalId && !loading ? <div className="wb-empty"><h2>未找到这张图谱</h2><p>请从左侧选择已保存的学习空间，不会自动创建新目标。</p></div> : !loading && emptyComposer()}
     </section>
     <aside className={`wb-graph-rail wb-mobile-${mobilePanel === 'graph' ? 'show' : 'hide'}`} aria-label="图谱与节点">
       {!atStart && <h2>{route.creating ? '新目标预览' : '当前图谱'}</h2>}

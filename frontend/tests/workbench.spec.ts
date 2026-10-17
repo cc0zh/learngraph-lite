@@ -33,7 +33,7 @@ test('workbench: explicit goal mode, embedded review, publish and node-started c
   const sent = posts(page);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('/');
+  await page.goto('/?mode=chat');
   await page.getByRole('button', { name: '创建目标', exact: true }).click();
   await expect(page.getByRole('region', { name: '创建目标', exact: true })).toBeVisible();
   expect(sent).toHaveLength(0);
@@ -317,7 +317,7 @@ test('workbench: a rejected initial run retains the full input as the saved conv
   const input = '这是完整的普通对话输入。'.repeat(18);
   await page.route('**/api/sessions/*/runs', route => route.request().method() === 'POST'
     ? route.fulfill({ status: 422, json: { detail: { message: 'fixture initial rejection' } } }) : route.continue());
-  await page.goto('/');
+  await page.goto('/?mode=chat');
   await page.getByRole('textbox', { name: '发送消息', exact: true }).fill(input);
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '发送消息', exact: true })).toHaveValue(input);
@@ -335,7 +335,7 @@ test('workbench: a late creation response never deletes a newer draft', async ({
     if (route.request().method() !== 'POST') { await route.continue(); return; }
     const response = await route.fetch(); arrived(); await gate; await route.fulfill({ response });
   });
-  await page.goto('/');
+  await page.goto('/?mode=chat');
   await page.getByRole('textbox', { name: '发送消息', exact: true }).fill('原来授权发送的问题');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await seen;

@@ -8,6 +8,29 @@
 
 工作台通过 `POST /api/workbench/goals` 使用客户端 UUID 幂等创建目标，再以独立 request_id 发起规划；创建本身不调用模型。`GET /api/conversations` 读取会话目录，`POST /api/conversations` 创建带固定类型及目标/节点作用域的会话，`GET /api/conversations/{session_id}` 恢复元数据。节点学习会话使用 teaching，兼容 runner 续聊保持原模式。浏览其他节点不修改会话作用域；教材、题目和成绩按节点共享，transcript 不合并。请求字段、幂等冲突与状态以 OpenAPI 和[架构说明](ARCHITECTURE.md)为准。
 
+首页 `/` 默认创建学习主题，`/?mode=goal` 保留兼容；`/?mode=chat` 是不绑定图谱的普通聊天入口。发布后在主区选择节点，开始新对话才调用模型，继续只恢复既有对话。
+
+### 删除会话、放弃目标与删除图谱
+
+| 接口 | 输入与结果 | 删除范围 |
+| --- | --- | --- |
+| `DELETE /api/conversations/{session_id}` | 无 body 或 `{}`；成功 `200 {"deleted":true,"session_id":"…"}` | 当前会话与已登记父关系的子 session 运行/请求/解释历史；保留共享节点教材、题目、成绩、事件 ACK 和原始资料 |
+| `DELETE /api/goals/{goal_id}` | JSON `{"expected_version":当前规划版本}`；成功 `200 {"deleted":true,"goal_id":"…"}` | 未完成目标或已发布主题的规划、学习资产、提案、会话、运行、资料绑定；独立上传的 documents/chunks/索引及其他主题保留 |
+
+派生 `planning:{goal_id}` 会话不能单独删除，返回 `409 planning_conversation`，应放弃或删除整个主题。版本过期为 `409 version_conflict`。对应范围仍有 queued/实际执行线程时拒绝删除；公开 cancelled 但工作线程未退出同样拒绝，不因删除自动取消任务或调用模型。
+
+未知 ID 返回 404；已成功删除的同 ID 再次 DELETE 返回相同成功结构（目标仍要求合法的非负整数 expected_version，已删后不再比较旧版本）。短事务硬清数据并保留仅有 ID 的删除标记，阻止旧创建请求、迟到提交或重试复活；删除失败回滚，不报告部分成功。
+
+工作台在 DELETE 前保存删除收据，包含目标身份和已知会话 ID，避免重载后目录已消失、无法清理本地草稿。响应丢失时先 GET 原记录：404 才确认清理；仍存在则读取当前版本，用户再次确认后才重发。查询失败不能当成已删除，挂载/刷新不会自动重复 DELETE 或模型请求。
+
+### 教材与解释的会话归属
+
+工作台为教材生成和组件解释使用独立子 session。`POST /api/goals/{goal}/nodes/{node}/lessons` 和 `POST /api/sessions/{child}/runs` 的解释 body 可带 `parent_session_id`；练习生成入口也兼容该字段。新工作台请求传入原节点会话 ID，后端校验父子 goal/node 相同、父会话存在且未删除，已建立的父关系不可更换，字段参与幂等及 retry 输入比较。恢复旧请求沿用原输入，不擅自追加字段改写历史指纹。
+
+HTTP 检查之外，持久化 SDK `loop.run/submit` 在 SQLite 准入事务内复核独立会话和父关系，不能通过复用其他主题的会话 ID 建立删除关系。被删 run 的仅 ID 标记也阻止旧 SDK 回答缓存和生成请求投影重新落盘。
+
+旧版本没有记录父关系的随机子 session 无法可靠倒推归属，删除单条会话不猜测清理；删除整个主题时仍按保存的 goal_id 清除。这是历史数据限制，不声称完整迁移或跨会话记忆。
+
 ## 启动独立 echo fixture API
 
 Windows PowerShell：

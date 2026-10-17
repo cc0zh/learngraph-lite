@@ -16,6 +16,7 @@
 .wb-spaces .section-title { gap: 8px; margin: 0 4px 16px; }
 .wb-spaces .section-title button { background: transparent; color: var(--muted); }
 .wb-spaces .wb-new-chat { width: 100%; justify-content: flex-start; background: var(--accent); color: #203d30; font-weight: 600; border-radius: 100px; padding: 12px 18px; flex-shrink: 0; }
+.wb-spaces .wb-plain-chat { justify-content: flex-start; margin-top: 8px; padding: 10px 18px; color: var(--muted); background: transparent; flex-shrink: 0; }
 .wb-space-group { margin-top: 28px; }
 .wb-space-group h3 { color: var(--muted); font-size: 14px; font-weight: 400; margin: 0 8px 10px; }
 .wb-space-group details { padding: 0; margin: 2px 0 8px; }
@@ -29,6 +30,11 @@
 .wb-session, .wb-space-open { width: 100%; text-align: left; margin: 4px 0; padding: 10px; line-height: 1.6; background: transparent; font-weight: 400; }
 .wb-space-open { justify-content: flex-start; }
 .wb-session { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+.wb-session-row { display: flex; align-items: center; min-width: 0; }
+.wb-session-row > .wb-session { flex: 1; min-width: 0; }
+.wb-spaces .wb-delete-session { flex: 0 0 30px; min-height: 44px; padding: 4px; font-size: 22px; font-weight: 400; background: transparent; color: var(--muted); }
+.wb-spaces .wb-delete-goal { justify-content: flex-start; background: transparent; color: var(--muted); font-size: 13px; padding: 8px 10px; }
+.wb-spaces .wb-delete-session:hover:not(:disabled), .wb-spaces .wb-delete-goal:hover:not(:disabled) { color: #ffd7c9; background: #573a32; }
 .wb-session > .ui-icon { width: 16px; margin-top: 3px; color: var(--muted); }
 .wb-session[aria-current=page], .wb-space-open[aria-current=page] { background: var(--accent-soft); color: var(--primary); }
 .wb-session-content { min-width: 0; }
@@ -136,6 +142,11 @@
 .overview-facts { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; padding: 0 0 24px; color: var(--muted); font-size: 14px; }
 .overview-facts strong { font-size: 20px; color: var(--ink); font-variant-numeric: tabular-nums; }
 .overview-state { margin-left: auto; }
+.overview-entry { margin-bottom: 24px; padding: 20px 24px; background: var(--surface); border-radius: var(--radius); }
+.overview-entry h3 { margin: 0 0 8px; font-size: 20px; }
+.overview-entry p { margin: 8px 0; }
+.overview-entry label { display: block; max-width: 460px; margin: 16px 0 8px; font-size: 14px; }
+.overview-entry select { display: block; width: 100%; margin-top: 8px; }
 .knowledge-overview .graph-canvas { flex: 1 0 340px; height: 45vh; min-height: 340px; background: var(--surface); border-radius: var(--composer-radius); }
 .overview-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-top: 20px; }
 .overview-footer p { color: var(--muted); font-size: 13px; }

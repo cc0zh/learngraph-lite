@@ -217,7 +217,7 @@ test('enso: unified learning, goal-creation and planning composers retain labels
 
 test('enso: ordinary chat sends only with Ctrl/Meta+Enter, never bare Enter or a composing shortcut', async ({ page, request }) => {
   const sent = posts(page);
-  await page.goto('/');
+  await page.goto('/?mode=chat');
   const input = page.getByRole('textbox', { name: '发送消息', exact: true });
   const submit = page.locator('.message-composer button[type=submit]');
   await input.fill('普通 Enter 只换行');

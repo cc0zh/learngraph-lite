@@ -11,3 +11,4 @@
 ## 初始文档
 
 - `core-beliefs.md`
+- [求职作品的最小完整形态](portfolio-product-boundary.md)：现有方向内的产品边界与模块取舍；第一轮使用闭环已实施，其余候选范围不视为自动授权。

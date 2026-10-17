@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, HttpError, terminal } from './api';
+import { isDeletedSession } from './deletedSessions';
 import type { Run } from './types';
 
 export interface Command { path: string; body: Record<string, unknown> }
@@ -20,17 +21,18 @@ export function useRuns(session: string, onComplete: () => void) {
   complete.current = onComplete;
   const notified = useRef(new Set<string>());
   const notifyTerminal = useCallback((records: Pick<Run, 'run_id' | 'status'>[]) => {
+    if (isDeletedSession(session)) return;
     const fresh = records.filter(run => terminal(run.status) && !notified.current.has(run.run_id));
     fresh.forEach(run => notified.current.add(run.run_id));
     if (fresh.length) complete.current();
-  }, []);
+  }, [session]);
   const active = runs.find(r => !terminal(r.status));
   const refresh = useCallback(async () => {
     const version = ++queryVersion.current;
     setPendingChecked(false);
     try {
       const history = await api<Run[]>(`/sessions/${session}/runs`);
-      if (version !== queryVersion.current) return;
+      if (version !== queryVersion.current || isDeletedSession(session)) return;
       setRuns(history); setError(''); setPendingChecked(!!pendingRef.current);
       notifyTerminal(history);
       // PublicRun has no request_id. Never guess which run acknowledges a pending
@@ -81,13 +83,14 @@ export function useRuns(session: string, onComplete: () => void) {
   }, [activeId]);
 
   async function submit(command: Command) {
-    if (sendingRef.current) return;
+    if (sendingRef.current || isDeletedSession(session)) return false;
     sendingRef.current = true;
     ++queryVersion.current;
     pendingRef.current = command; setPending(command); setPendingChecked(false);
     setSending(true); setError(''); localStorage.setItem(`${key}:pending`, JSON.stringify(command));
     try {
       const run = await api<Run>(command.path, command.body);
+      if (isDeletedSession(session)) return false;
       ++queryVersion.current;
       localStorage.setItem(`${key}:${run.run_id}`, JSON.stringify(command));
       localStorage.removeItem(`${key}:pending`); pendingRef.current = undefined; setPending(undefined); setPendingChecked(false);
@@ -95,6 +98,7 @@ export function useRuns(session: string, onComplete: () => void) {
       if (terminal(run.status)) notifyTerminal([run]);
       return true;
     } catch (e) {
+      if (isDeletedSession(session)) return false;
       if (e instanceof HttpError && e.status >= 400 && e.status < 500 && e.status !== 429) {
         localStorage.removeItem(`${key}:pending`); pendingRef.current = undefined; setPending(undefined); setPendingChecked(false);
         await refresh(); setError(`请求被拒绝：${e.message}。请检查输入后重新发起。`);

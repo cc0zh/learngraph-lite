@@ -229,7 +229,7 @@ for (const failure of ['not-delivered', 'response-lost', 'mismatched-ack'] as co
     await expect(panel.getByRole('article', { name: '组件解释' })).toContainText('已恢复解释');
     expect(events).toHaveLength(2);
     expect(events[1]).toEqual(events[0]);
-    expect(commands).toEqual([{ request_id: saved.requestId, mode: 'explanation', goal_id: goal, node_id: 'n',
+    expect(commands).toEqual([{ request_id: saved.requestId, mode: 'explanation', goal_id: goal, node_id: 'n', parent_session_id: goal,
       source_event_id: saved.event.event_id, explanation_slot: saved.slot }]);
     expect(commands[0]).not.toHaveProperty('user_text');
   });
@@ -404,7 +404,7 @@ test('P1 lessons: a failed step ACK and its explanation reuse the exact saved st
   await expect(stepper).toContainText('步骤已保存');
   expect(events).toEqual([events[0], events[0], events[0]]);
   expect(events[0]).toMatchObject({ action: 'step_changed', payload: { step: 1 } });
-  expect(commands).toEqual([{ request_id: saved.requestId, mode: 'explanation', goal_id: goal, node_id: 'n',
+  expect(commands).toEqual([{ request_id: saved.requestId, mode: 'explanation', goal_id: goal, node_id: 'n', parent_session_id: goal,
     source_event_id: events[0].event_id, explanation_slot: saved.slot }]);
   await expect(page.locator('.progress-card')).toContainText('0 个有效样本');
 });
