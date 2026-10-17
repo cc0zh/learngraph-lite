@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, HttpError } from '../api';
-import { ErrorBox, GraphCanvas } from '../components';
+import { ErrorBox, GraphCanvas, Icon } from '../components';
+import { MessageComposer } from '../MessageComposer';
 import { AgentPlanning } from '../pages/AgentPlanning';
 import { Documents, DocumentDetail, DocumentBindings } from '../documents';
 import type { Conversation, Plan, Run } from '../types';
@@ -192,29 +193,28 @@ export function Workbench() {
     const isGoal = route.creating;
     const value = isGoal ? draft : plainText;
     return <section className="wb-start" aria-label={isGoal ? '创建目标' : '工作台起点'}>
-      <div className="wb-empty"><p className="eyebrow">{isGoal ? '创建目标模式' : '图谱组织知识，对话承载学习'}</p>
+      <div className="wb-empty">
         <h1>{isGoal ? '从你的学习想法开始' : '想探索什么知识？'}</h1>
         <p>{isGoal ? '描述想了解的主题。Agent 会按需澄清并提出图谱草稿，确认仍由你决定。' : '选择左侧图谱继续学习，或切换到创建目标模式建立一张新图谱。'}</p>
       </div>
-      <form className="composer wb-composer" onSubmit={event => { event.preventDefault(); if (!value.trim() || pending) return;
+      <MessageComposer id="workbench-initial-input" label={isGoal ? '描述学习目标' : '发送消息'} value={value} onSubmit={() => { if (!value.trim() || pending) return;
         void create({ kind: isGoal ? 'goal' : 'general', id: crypto.randomUUID(), title: value.trim(), request: crypto.randomUUID() });
-      }}>
-        <label htmlFor="workbench-initial-input">{isGoal ? '描述学习目标' : '发送消息'}</label><textarea id="workbench-initial-input" value={value} maxLength={isGoal ? 2000 : 16000} onChange={event => {
-          if (isGoal) { setDraft(event.target.value); localStorage.setItem(goalDraftKey, event.target.value); }
-          else { setPlainText(event.target.value); localStorage.setItem('learngraph:workbench:plain-draft', event.target.value); }
-        }} placeholder={isGoal ? '例如：想系统了解 RAG，我会 Python…' : '输入问题，或点击下方创建目标…'}/>
-        <div className="actions"><button disabled={creating || !!pending || !value.trim()}>{creating ? '正在创建…' : isGoal ? '发送并创建目标' : '发送消息'}</button>
-          <button type="button" className={isGoal ? 'selected' : 'quiet'} aria-pressed={isGoal} onClick={() => isGoal ? navigate({ ...route, creating: false }) : goalMode()}>{isGoal ? '退出创建模式' : '创建目标'}</button></div>
-        <p className="small muted">切换模式不创建目标；发送后才调用模型。刷新不会重复生成。</p>
-      </form>
+      }} maxLength={isGoal ? 2000 : 16000} onChange={next => {
+        if (isGoal) { setDraft(next); localStorage.setItem(goalDraftKey, next); }
+        else { setPlainText(next); localStorage.setItem('learngraph:workbench:plain-draft', next); }
+      }} placeholder={isGoal ? '例如：想系统了解 RAG，我会 Python…' : '输入问题，或点击下方创建目标…'}
+        disabled={creating || !!pending || !value.trim()} submitLabel={creating ? '正在创建…' : isGoal ? '发送并创建目标' : '发送消息'}
+        note="切换模式不创建目标；发送后才调用模型。刷新不会重复生成。">
+        <button type="button" className={isGoal ? 'selected composer-mode' : 'quiet composer-mode'} aria-pressed={isGoal} onClick={() => isGoal ? navigate({ ...route, creating: false }) : goalMode()}><Icon name="plus"/>{isGoal ? '退出创建模式' : '创建目标'}</button>
+      </MessageComposer>
     </section>;
   }
   const documentGoal = route.sourceGoal ?? goalId;
   const documentNode = route.sourceNode ?? (route.sourceGoal !== undefined ? undefined : active?.node_id || undefined);
   return <div className={`workbench ${railHidden ? 'wb-rail-hidden' : ''} ${route.tool ? 'wb-tool-open' : ''}`}>
-    <header className="wb-context" aria-label="当前对话范围"><div><span className="eyebrow">{route.creating ? '创建目标模式' : planning ? plan?.graph?.status === 'published' ? '目标创建记录' : '目标创建模式' : active?.kind === 'learning' ? '节点学习' : '学习工作台'}</span>
+    <header className="wb-context" aria-label="当前对话范围"><div>
       <h1 title={route.creating ? '新目标' : plan?.goal.title || active?.title || '我的学习空间'}>{route.creating ? '新目标' : plan?.goal.title || active?.title || '我的学习空间'}</h1>
-      <p>{route.creating ? '当前输入用于创建新目标，不会修改已有图谱。' : active?.kind === 'learning' ? `本条对话 · 节点：${currentNode?.title || active.node_id}` : planning ? '目标澄清、图谱生成与审核' : active ? '普通对话 · 未绑定图谱' : plan ? '浏览图谱 · 尚未进入学习对话' : '尚未绑定图谱或节点'}</p>
+      <p className="wb-scope"><span>{route.creating ? '创建目标模式' : planning ? plan?.graph?.status === 'published' ? '目标创建记录' : '目标创建模式' : active?.kind === 'learning' ? '节点学习' : '学习工作台'}</span><span>{route.creating ? '当前输入用于创建新目标，不会修改已有图谱。' : active?.kind === 'learning' ? `本条对话 · 节点：${currentNode?.title || active.node_id}` : planning ? '目标澄清、图谱生成与审核' : active ? '普通对话 · 未绑定图谱' : plan ? '浏览图谱 · 尚未进入学习对话' : '尚未绑定图谱或节点'}</span></p>
       {!route.creating && active?.kind === 'learning' && <p className="small">会话：{active.title} · {createdLabel(active)}</p>}</div>
       <div className="actions">{!route.creating && (active || plan) && <button className="quiet" onClick={goalMode}>创建目标</button>}
         {plan && !route.creating && <button className="quiet" onClick={() => openTool('graph')}>图谱管理</button>}
@@ -226,27 +226,29 @@ export function Workbench() {
       setMobilePanel(id); if (id === 'graph') setRailHidden(false);
     }}>{title}</button>)}</nav>
     <aside className={`wb-spaces wb-mobile-${mobilePanel === 'spaces' ? 'show' : 'hide'}`} aria-label="学习空间">
-      <div className="section-title"><h2>学习空间</h2><button className="quiet" onClick={() => { void refresh(); }}>刷新</button></div>
-      <button className="wb-new-chat quiet" onClick={() => navigate({ creating: false })}>新对话</button>
+      <div className="section-title"><h2>学习空间</h2><button className="quiet icon-button" aria-label="刷新" title="刷新学习空间" onClick={() => { void refresh(); }}><Icon name="refresh"/></button></div>
+      <button className="wb-new-chat quiet" onClick={() => navigate({ creating: false })}><Icon name="plus"/>新对话</button>
       {loading && <p role="status">正在读取图谱与会话…</p>}
       {!loading && !plans?.length && <p className="muted small">还没有图谱，点击创建目标开始。</p>}
       {(['published', 'draft'] as const).map(status => {
         const group = plans?.filter(item => (item.graph?.status === 'published') === (status === 'published')) || [];
         return !!group.length && <section className="wb-space-group" key={status}><h3>{status === 'published' ? '我的图谱' : '待完成目标'}</h3>
           {group.map(item => <details key={item.goal_id} open={goalId === item.goal_id || undefined}>
-            <summary><span>{item.goal.title}</span></summary>
+            <summary title={item.goal.title} onKeyDown={event => { if (event.key === ' ') event.stopPropagation(); }}><Icon name="chevron"/><Icon name="folder"/><span>{item.goal.title}</span></summary>
+            <div className="wb-goal-items">
             <button className="quiet wb-space-open" aria-current={goalId === item.goal_id && !route.session ? 'page' : undefined} onClick={() => navigate({ goal: item.goal_id, creating: false })}>{item.graph ? '查看图谱' : '查看目标'}</button>
             {conversations.filter(value => value.goal_id === item.goal_id).map(value => <button key={value.session_id} className={`wb-session ${route.session === value.session_id && !route.creating ? 'selected' : 'quiet'}`} aria-current={route.session === value.session_id && !route.creating ? 'page' : undefined}
-              onClick={() => openConversation(value)}><span>{value.kind === 'planning' ? '目标创建对话' : value.title}</span>
-              <small>{value.kind === 'learning' ? `节点：${item.graph?.nodes.find(node => node.id === value.node_id)?.title || value.node_id}` : value.kind === 'planning' ? item.graph?.status === 'published' ? '已完成 · 只读' : '继续创建' : '普通对话'}</small>{value.kind === 'learning' && <small>{createdLabel(value)}</small>}</button>)}
+              onClick={() => openConversation(value)}><Icon name="chat"/><span className="wb-session-content"><span className="wb-session-title" title={value.kind === 'planning' ? '目标创建对话' : value.title}>{value.kind === 'planning' ? '目标创建对话' : value.title}</span>
+              <small>{value.kind === 'learning' ? `节点：${item.graph?.nodes.find(node => node.id === value.node_id)?.title || value.node_id}` : value.kind === 'planning' ? item.graph?.status === 'published' ? '已完成 · 只读' : '继续创建' : '普通对话'}</small></span>{value.kind === 'learning' && <time dateTime={value.created_at} title={createdLabel(value)}>{new Date(value.created_at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</time>}</button>)}
+            </div>
           </details>)}
         </section>;
       })}
-      {!!conversations.filter(value => value.kind === 'general').length && <section className="wb-space-group"><h3>其他对话</h3>{conversations.filter(value => value.kind === 'general').map(value => <button key={value.session_id} className={route.session === value.session_id ? 'wb-session selected' : 'wb-session quiet'} onClick={() => openConversation(value)}>{value.title}</button>)}</section>}
+      {!!conversations.filter(value => value.kind === 'general').length && <section className="wb-space-group"><h3>其他对话</h3>{conversations.filter(value => value.kind === 'general').map(value => <button key={value.session_id} className={route.session === value.session_id ? 'wb-session selected' : 'wb-session quiet'} aria-current={route.session === value.session_id ? 'page' : undefined} onClick={() => openConversation(value)}><Icon name="chat"/><span className="wb-session-content"><span className="wb-session-title" title={value.title}>{value.title}</span></span></button>)}</section>}
     </aside>
     <section className={`wb-main wb-mobile-${mobilePanel === 'main' ? 'show' : 'hide'}`} aria-label="对话与学习内容">
       <ErrorBox error={error || (scopeMismatch ? '链接中的图谱与会话范围不一致。请从左侧重新打开这条对话。' : '')}/>{notice && <p className="hint" role="status">{notice}</p>}
-      {route.tool && <div className="wb-tool-heading"><p className="eyebrow">工作台 · {route.tool === 'graph' ? '图谱管理' : '学习资料'}</p><button className="quiet" onClick={() => openTool()}>返回对话与学习</button></div>}
+      {route.tool && <div className="wb-tool-heading"><p className="scope-label">工作台 · {route.tool === 'graph' ? '图谱管理' : '学习资料'}</p><button className="quiet" onClick={() => openTool()}>返回对话与学习</button></div>}
       {pending && <section className="hint" aria-label="创建恢复"><strong>有一项创建尚未确认</strong><p>{pending.title}</p><p>刷新只读取状态。继续会复用原创建标识和请求，不重复创建。</p>
         <button disabled={creating} onClick={() => { void create(pending); }}>继续本次创建</button><button className="quiet" onClick={() => { void refresh(); }}>查询学习空间</button></section>}
       {scopeMismatch ? null : route.tool === 'document' && route.document ? <DocumentDetail key={`${route.document}:${route.query}`} documentId={route.document} query={route.query}/>
@@ -257,7 +259,7 @@ export function Workbench() {
         : route.creating ? emptyComposer() : creationBlocked ? <p className="hint">请先通过上方“继续本次创建”恢复原请求；恢复前不会从这里发起替代的首轮。</p> : planning && goalId ? <AgentPlanning key={goalId} goalId={goalId} sidebarTarget={sidebarTarget} onPlanChange={onPlanChange}/>
         : active ? <WorkbenchConversation key={active.session_id} conversation={active} onChanged={refresh} onBrowse={nodeId => { setBrowsed(nodeId); setRailHidden(false); setMobilePanel('graph'); }}/>
           : route.session && !loading ? <div className="wb-empty"><h2>未找到这条会话</h2><p>请刷新学习空间，或从左侧选择已保存对话；不会自动创建替代会话。</p></div>
-            : plan ? <div className="wb-empty"><p className="eyebrow">{plan.graph?.status === 'published' ? '从地图上的一个节点开始' : '目标尚未完成'}</p><h2>{plan.graph?.status === 'published' ? '选择主题，再开始一次学习' : '继续完善你的目标与图谱'}</h2><p>查看右侧节点不会改变任何会话。准备好后，点击开始学习，或恢复已有对话。</p>
+            : plan ? <div className="wb-empty"><h2>{plan.graph?.status === 'published' ? '选择主题，开始学习' : '继续完善目标与图谱'}</h2><p>查看右侧节点不会改变任何会话。准备好后，点击开始学习，或恢复已有对话。</p>
               <button className="quiet" onClick={() => navigate({ goal: plan.goal_id, session: `planning:${plan.goal_id}`, creating: false })}>查看目标创建对话</button></div> : goalId && !loading ? <div className="wb-empty"><h2>未找到这张图谱</h2><p>请从左侧选择已保存的学习空间，不会自动创建新目标。</p></div> : !loading && emptyComposer()}
     </section>
     <aside className={`wb-graph-rail wb-mobile-${mobilePanel === 'graph' ? 'show' : 'hide'}`} aria-label="图谱与节点">
@@ -265,7 +267,7 @@ export function Workbench() {
       {!route.creating && plan?.graph ? <><p className="small muted">{plan.graph.status === 'published' ? '已发布' : '草稿 · 待审核'} · {plan.graph.nodes.length} 个节点</p>
         <GraphCanvas graph={plan.graph} selected={viewedNode?.id} onSelect={setBrowsed} compact/>
         <div className="wb-node-list" role="region" aria-label="浏览图谱节点">{plan.graph.nodes.map(node => <button key={node.id} className={browsed === node.id ? 'selected' : 'quiet'} aria-pressed={browsed === node.id} onClick={() => setBrowsed(node.id)}>{node.title}{currentNode?.id === node.id && <small>对话焦点</small>}</button>)}</div>
-        {viewedNode ? <section className="wb-node-detail" aria-label="所查看节点"><p className="eyebrow">正在浏览 · 不改变对话范围</p><h3>{viewedNode.title}</h3><p>{viewedNode.explanation}</p>
+        {viewedNode ? <section className="wb-node-detail" aria-label="所查看节点"><h3>{viewedNode.title}</h3><p className="scope-label">正在浏览 · 不改变对话范围</p><p>{viewedNode.explanation}</p>
           {viewedNode.learning_outcome && <p className="small muted">学习参考：{viewedNode.learning_outcome}</p>}
           {plan.graph.status === 'published' ? <><button disabled={creating || !!pending} onClick={() => startLearning(viewedNode.id)}>开始学习此节点</button><p className="small muted">新建独立对话，并调用模型开始讲解。</p>
             <div className="wb-node-history"><h4>继续已有对话</h4>{conversations.filter(value => value.kind === 'learning' && value.goal_id === goalId && value.node_id === viewedNode.id).map(value => <button key={value.session_id} className="quiet" onClick={() => openConversation(value)}>{value.title}</button>)}

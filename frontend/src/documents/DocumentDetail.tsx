@@ -116,7 +116,7 @@ function DetailScope({ documentId, query: search }: Required<DocumentDetailProps
   const selectedGoal = goals.find(goal => goal.goal_id === goalId);
   const validScope = !!selectedGoal && (!nodeId || selectedGoal.graph?.nodes.some(node => node.id === nodeId));
   const hasScopeBinding = bindings.some(binding => binding.goal_id === goalId && binding.node_id === (nodeId || null));
-  return <section className="documents-scope documents-tool" aria-label="资料详情"><header className="doc-heading"><div><p className="eyebrow">资料原文</p><h1>{document?.filename || '资料详情'}</h1></div><DocumentLink href={workbenchHref({ tool: 'documents', document: undefined, chunk: undefined }, search)}>返回资料列表</DocumentLink></header>
+  return <section className="documents-scope documents-tool" aria-label="资料详情"><header className="doc-heading"><div><h1>{document?.filename || '资料详情'}</h1><p className="doc-muted">资料原文</p></div><DocumentLink href={workbenchHref({ tool: 'documents', document: undefined, chunk: undefined }, search)}>返回资料列表</DocumentLink></header>
     <DocumentError error={error}/>{loading && <p role="status">正在读取资料…</p>}
     {document && <><section className="doc-panel"><DocumentStatus document={document}/>
       <p className="doc-muted">{(document.size_bytes / 1024).toFixed(1)} KB · 资料版本 {document.revision} · {document.kind || '未知格式'}</p>

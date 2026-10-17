@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { ErrorBox, PendingRequest, RunCitations, RunStatus, SafeMarkdown } from '../components';
+import { ErrorBox, Icon, PendingRequest, RunCitations, RunStatus, SafeMarkdown } from '../components';
+import { MessageComposer } from '../MessageComposer';
 import { LessonPanel } from '../lessons/LessonPanel';
 import { QuizCard } from '../lessons/QuizCard';
 import type { Context, Conversation, Exercise, Feedback, NextAction } from '../types';
@@ -64,16 +65,21 @@ export function WorkbenchConversation({ conversation, onChanged, onBrowse }: { c
     }
   }
   return <section className="wb-conversation" aria-label="学习对话">
-    {node && <div className="wb-content-tabs" role="tablist" aria-label="主区内容">
-      <button role="tab" aria-selected={tab === 'chat'} onClick={() => show('chat')}>对话</button>
-      <button role="tab" aria-selected={tab === 'content'} onClick={() => show('content')}>学习内容</button>
+    {node && <div className="wb-content-tabs" role="tablist" aria-label="主区内容" onKeyDown={event => {
+      if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 'chat' : event.key === 'End' ? 'content' : tab === 'chat' ? 'content' : 'chat';
+      show(next); event.currentTarget.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)?.focus();
+    }}>
+      <button id={`chat-tab-${session}`} data-view="chat" role="tab" aria-controls={`chat-panel-${session}`} tabIndex={tab === 'chat' ? 0 : -1} aria-selected={tab === 'chat'} onClick={() => show('chat')}><Icon name="chat"/>对话</button>
+      <button id={`content-tab-${session}`} data-view="content" role="tab" aria-controls={`content-panel-${session}`} tabIndex={tab === 'content' ? 0 : -1} aria-selected={tab === 'content'} onClick={() => show('content')}><Icon name="book"/>学习内容</button>
     </div>}
     <ErrorBox error={error || tasks.error}/>
     <PendingRequest command={tasks.pending} checked={tasks.pendingChecked} sending={tasks.sending}
       query={() => { void tasks.refresh(); }} resend={() => { void recover(); }}/>
-    <div className="wb-dialogue" hidden={tab !== 'chat'}>
+    <div className="wb-dialogue" id={`chat-panel-${session}`} role={node ? 'tabpanel' : undefined} tabIndex={node ? 0 : undefined} aria-labelledby={node ? `chat-tab-${session}` : undefined} hidden={tab !== 'chat'}>
       <div className="wb-turns" ref={history} aria-label="当前会话记录" aria-live="polite">
-        {!dialogue.length && <div className="wb-empty"><p className="eyebrow">独立的学习会话</p><h2>{node ? '围绕这个节点，开始交流' : '从一个问题开始'}</h2>
+        {!dialogue.length && <div className="wb-empty"><h2>{node ? '从这个节点开始交流' : '从一个问题开始'}</h2>
           <p>{node ? '这里保留本次对话的历史；已有教材、练习和学习记录仍可在学习内容中查看。' : '普通交流不绑定图谱。需要建立知识图谱时，请使用创建目标入口。'}</p></div>}
         {dialogue.map(run => <article className="turn" key={run.run_id}>
           <div className="user-message"><strong>你</strong><SafeMarkdown>{run.user_text}</SafeMarkdown></div>
@@ -82,7 +88,7 @@ export function WorkbenchConversation({ conversation, onChanged, onBrowse }: { c
         </article>)}
       </div>
     </div>
-    {goal && node && <div className="wb-learning-content lesson-panel" hidden={tab !== 'content'}>
+    {goal && node && <div className="wb-learning-content lesson-panel" id={`content-panel-${session}`} role="tabpanel" tabIndex={0} aria-labelledby={`content-tab-${session}`} hidden={tab !== 'content'}>
       <p className="wb-content-note">这些内容属于当前节点，可在不同会话中继续使用；其他会话的聊天历史不会自动带入。</p>
       <LessonPanel goalId={goal} nodeId={node} conversationId={session} refreshKey={revision} onChanged={refresh}/>
       <section className="wb-exercises" aria-label="节点已有练习"><h2>节点练习</h2>
@@ -98,13 +104,13 @@ export function WorkbenchConversation({ conversation, onChanged, onBrowse }: { c
       </section>
     </div>}
     <RunStatus run={latest} stop={tasks.stop} retry={tasks.retry} readOnly={!!tasks.pending}/>
-    {!tasks.pending && <button type="button" className="quiet wb-query-run" disabled={tasks.sending} onClick={() => { void tasks.refresh(); void refresh(); }}>查询运行状态</button>}
-    <form className="composer wb-composer" onSubmit={event => { event.preventDefault(); void send(); }}>
-      {tab === 'content' && <p className="small muted">解释按钮会关联具体章节或步骤；自由提问仍发送到本条对话。</p>}
-      <label htmlFor={`question-${session}`}>{node ? '向当前节点提问' : '发送消息'}</label><textarea id={`question-${session}`} value={text} onChange={event => edit(event.target.value)}
-        maxLength={16000} placeholder={node ? '说说哪里还没理解，或继续追问…' : '输入问题，或点击创建目标建立图谱…'}/>
-      <div className="actions"><button disabled={tasks.busy || historyUnavailable || !text.trim() || (!!node && !context)} onClick={() => show('chat')}>发送问题</button>
-        {tasks.active && <button type="button" className="quiet" onClick={() => { void tasks.stop(); }}>停止回答</button>}</div>
-    </form>
+    <MessageComposer id={`question-${session}`} label={node ? '向当前节点提问' : '发送消息'} value={text} onChange={edit}
+      onSubmit={() => { show('chat'); void send(); }} submitLabel="发送问题" disabled={tasks.busy || historyUnavailable || !text.trim() || (!!node && !context)} maxLength={16000}
+      placeholder={node ? '说说哪里还没理解，或继续追问…' : '输入问题，或点击创建目标建立图谱…'}
+      stop={tasks.active ? { label: '停止回答', onClick: () => { void tasks.stop(); } } : undefined}
+      note={tab === 'content' ? '解释按钮会关联具体章节或步骤；自由提问仍发送到本条对话。' : undefined}>
+      <span>{node ? '当前节点对话' : '普通对话'}</span>
+      {!tasks.pending && <button type="button" className="quiet wb-query-run icon-button" aria-label="查询运行状态" title="查询运行状态" disabled={tasks.sending} onClick={() => { void tasks.refresh(); void refresh(); }}><Icon name="refresh"/></button>}
+    </MessageComposer>
   </section>;
 }

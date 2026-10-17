@@ -1,7 +1,7 @@
 import Markdown from 'react-markdown';
 import { useEffect, useState } from 'react';
 import dagre from '@dagrejs/dagre';
-import { Background, Controls, ReactFlow } from '@xyflow/react';
+import { Controls, ReactFlow } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { Graph, Run } from './types';
 import { terminal } from './api';
@@ -17,6 +17,21 @@ const toolLabels: Record<string, string> = {
   create_exercise: '生成练习', create_lesson: '生成学习包',
   propose_graph_change: '提出图谱调整建议', read_skill: '读取学习指南',
 };
+const iconPaths = {
+  plus: 'M12 5v14M5 12h14',
+  chat: 'M20 11.5a8 8 0 0 1-8 8H5l-3 2V11.5a9 9 0 0 1 18 0Z',
+  folder: 'M3 7V5h6l2 2h10v12H3V7Z',
+  refresh: 'M20 8V3l-3 3a8 8 0 1 0 3 9M20 3h-5',
+  arrowUp: 'M12 19V5M6 11l6-6 6 6',
+  stop: 'M6 6h12v12H6Z',
+  chevron: 'm8 5 7 7-7 7',
+  check: 'm5 12 4 4L19 6',
+  warning: 'M12 8v5m0 3h.01M12 3 2 21h20L12 3Z',
+  book: 'M12 5v15M3 4h5l4 2 4-2h5v15h-5l-4 2-4-2H3V4Z',
+};
+export function Icon({ name }: { name: keyof typeof iconPaths }) {
+  return <svg className="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d={iconPaths[name]}/></svg>;
+}
 export function ErrorBox({ error }: { error: string }) { return error ? <p className="error" role="alert">{error}</p> : null; }
 export function SafeMarkdown({ children }: { children: string }) { return <Markdown skipHtml disallowedElements={['img']}>{children}</Markdown>; }
 export function RunCitations({ run, goalId, nodeId }: { run: Run; goalId: string; nodeId?: string }) {
@@ -44,20 +59,27 @@ export function GraphCanvas({ graph, selected, onSelect, compact = false }: { gr
     return { id: n.id, data: { label: compact ? n.title : `${n.title} · ${n.estimated_minutes} 分钟` }, position: { x: position.x - 80, y: position.y - height / 2 }, selected: selected === n.id,
       ...(compact ? { style: { width: 160, height, display: 'grid', placeItems: 'center', fontSize: 14 } } : {}) };
   });
-  return <div className="graph-canvas" aria-label={compact ? '知识图谱' : '学习路线图'}><ReactFlow nodes={nodes} edges={graph.edges.map((e, i) => ({ id: String(i), source: e.source, target: e.target }))}
-    onNodeClick={(_, n) => onSelect(n.id)} fitView nodesDraggable={false} nodesConnectable={false} minZoom={0.2}><Background/><Controls showInteractive={false}/></ReactFlow></div>;
+  return <div className="graph-canvas" data-ui aria-label={compact ? '知识图谱' : '学习路线图'}><ReactFlow nodes={nodes} edges={graph.edges.map((e, i) => ({ id: String(i), source: e.source, target: e.target }))}
+    onNodeClick={(_, n) => onSelect(n.id)} fitView nodesDraggable={false} nodesConnectable={false} minZoom={0.2}><Controls showInteractive={false}/></ReactFlow></div>;
 }
 export function RunStatus({ run, stop, retry, readOnly = false }: { run?: Run; stop: () => void; retry: () => void; readOnly?: boolean }) {
   const [now, setNow] = useState(Date.now());
   const live = run && !terminal(run.status);
   useEffect(() => { if (!live) return; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [live]);
   if (!run) return null;
+  const tools = Object.values(run.tool_activity || {});
+  const failedTools = tools.filter(tool => tool.status === 'failed').length;
   return <div className="run-status" role="status"><span className={!terminal(run.status) ? 'pulse' : ''}/><strong>{statusLabels[run.status] || run.status}</strong>
     <span>{{ planning: '讨论目标与路线', graph: '生成路线', clarify: '澄清目标', exercise: '生成练习', lesson: '生成学习包', explanation: '组件解释', proposal: '生成路线调整提案', teaching: '节点对话' }[run.mode] || '任务'}</span>
     {live && <span>{Math.max(0, Math.floor((now - Date.parse(run.created_at)) / 1000))} 秒</span>}
     {!readOnly && (!terminal(run.status) ? <button className="quiet" onClick={stop}>停止</button> : run.status !== 'completed' ? <button className="quiet" onClick={() => retry()}>重试</button> : null)}
     {run.error && <p className="error">{run.error}</p>}
-    {Object.values(run.tool_activity || {}).map(t => <div className="tool" data-tool-name={t.name} key={t.call_id}>{toolLabels[t.name] || '处理学习操作'} · {statusLabels[t.status] || t.status}{t.elapsed_ms !== undefined && ` · ${t.elapsed_ms} ms`}</div>)}
+    {/* ReactFlow listens on window; keep native summary Space activation local. */}
+    {!!tools.length && <details className="run-tools" key={run.run_id}><summary onKeyDown={event => { if (event.key === ' ') event.stopPropagation(); }}><Icon name="chevron"/><span>处理步骤</span><span className={failedTools ? 'run-tool-failures' : 'run-tool-count'}>{tools.length} 项{failedTools ? ` · ${failedTools} 项失败` : ''}</span></summary>
+      <ul className="run-tool-list">{tools.map(t => <li className="tool" data-tool-name={t.name} data-state={t.status} key={t.call_id}>
+        <Icon name={t.status === 'completed' ? 'check' : t.status === 'failed' ? 'warning' : 'chevron'}/><span className="run-tool-name">{toolLabels[t.name] || '处理学习操作'}</span><span className="run-tool-result">{statusLabels[t.status] || t.status}{t.elapsed_ms !== undefined && ` · ${t.elapsed_ms} ms`}</span>
+      </li>)}</ul>
+    </details>}
     {run.status === 'cancelled' && <small>停止不会撤销已经保存的业务结果。</small>}
   </div>;
 }

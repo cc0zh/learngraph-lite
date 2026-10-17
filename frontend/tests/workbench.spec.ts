@@ -318,12 +318,12 @@ test('workbench: a rejected initial run retains the full input as the saved conv
   await page.route('**/api/sessions/*/runs', route => route.request().method() === 'POST'
     ? route.fulfill({ status: 422, json: { detail: { message: 'fixture initial rejection' } } }) : route.continue());
   await page.goto('/');
-  await page.getByLabel('发送消息', { exact: true }).fill(input);
+  await page.getByRole('textbox', { name: '发送消息', exact: true }).fill(input);
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
-  await expect(page.getByLabel('发送消息', { exact: true })).toHaveValue(input);
+  await expect(page.getByRole('textbox', { name: '发送消息', exact: true })).toHaveValue(input);
   await expect(page.getByText(/首次请求被拒绝/)).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel('发送消息', { exact: true })).toHaveValue(input);
+  await expect(page.getByRole('textbox', { name: '发送消息', exact: true })).toHaveValue(input);
 });
 
 test('workbench: a late creation response never deletes a newer draft', async ({ page }) => {
@@ -336,12 +336,12 @@ test('workbench: a late creation response never deletes a newer draft', async ({
     const response = await route.fetch(); arrived(); await gate; await route.fulfill({ response });
   });
   await page.goto('/');
-  await page.getByLabel('发送消息', { exact: true }).fill('原来授权发送的问题');
+  await page.getByRole('textbox', { name: '发送消息', exact: true }).fill('原来授权发送的问题');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await seen;
-  await page.getByLabel('发送消息', { exact: true }).fill('响应等待期间的新草稿');
+  await page.getByRole('textbox', { name: '发送消息', exact: true }).fill('响应等待期间的新草稿');
   release();
   await expect(page.getByLabel('当前会话记录')).toContainText('原来授权发送的问题');
   await page.getByRole('button', { name: '新对话', exact: true }).click();
-  await expect(page.getByLabel('发送消息', { exact: true })).toHaveValue('响应等待期间的新草稿');
+  await expect(page.getByRole('textbox', { name: '发送消息', exact: true })).toHaveValue('响应等待期间的新草稿');
 });

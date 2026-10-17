@@ -52,7 +52,7 @@ export function Documents({ onChanged }: { onChanged?: () => void }) {
     } catch (e) { setError(documentError(e)); }
     finally { setBusy(false); }
   }
-  return <section className="documents-scope documents-tool" aria-label="资料管理"><header className="doc-heading"><div><p className="eyebrow">你的资料，保留可校验的原文</p><h1>我的资料</h1></div></header>
+  return <section className="documents-scope documents-tool" aria-label="资料管理"><header className="doc-heading"><div><h1>我的资料</h1><p className="doc-muted">你的资料，保留可校验的原文</p></div></header>
     <section className="doc-panel"><h2>上传学习资料</h2><p className="doc-muted">支持 UTF-8 TXT / Markdown 和含文本的 PDF；每个文件最多 10 MB、20 万字符，PDF 最多 100 页。不自动 OCR，不执行原文 HTML。</p>
       <form onSubmit={upload}><label>选择资料文件<input ref={input} type="file" accept=".txt,.md,.markdown,.pdf" disabled={busy} onChange={e => setFile(e.target.files?.[0])}/></label>
         <div className="doc-actions"><button disabled={!file || busy}>{busy ? '正在上传…' : '上传资料'}</button><button type="button" className="quiet" disabled={loading || busy} onClick={() => setRefresh(n => n + 1)}>刷新资料列表</button></div></form>

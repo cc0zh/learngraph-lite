@@ -6,6 +6,7 @@ import { Citations } from '../documents';
 import type { Goal, Plan, PlanningAnswer, PlanningCard, Run } from '../types';
 import { useRuns } from '../useRuns';
 import { orderedStages, RouteOverview } from './RouteOverview';
+import { MessageComposer } from '../MessageComposer';
 
 function sameInputs(a: Goal, b: Goal) {
   return ['title', 'desired_outcome', 'current_level', 'constraints'].every(key => String(a[key as keyof Goal]).trim() === String(b[key as keyof Goal]).trim())
@@ -245,12 +246,12 @@ export function AgentPlanning({ goalId, sidebarTarget, onPlanChange }: {
       </div>
       <RunStatus run={tasks.runs.at(-1)} stop={tasks.stop} retry={tasks.retry} readOnly={!!tasks.pending || !!published || saving || (!tasks.active && (checking || dirty.current || uncertain))}/>
       {!published && plan.goal.confirmed && !plan.graph && <div className="hint"><p>目标已确认。生成图谱需要你显式授权；刷新不会自动继续。</p><button disabled={!canTalk} onClick={() => { void send(continueText); }}>继续生成图谱</button></div>}
-      {!published && <form className="composer" onSubmit={event => { event.preventDefault(); const submitted = text.trim();
+      {!published && <MessageComposer id={`planning-input-${goalId}`} label="和 Agent 讨论目标与路线" value={text} onChange={changeText} onSubmit={() => { const submitted = text.trim();
         void send(submitted).then(accepted => { if (accepted) setText(value => { if (value === submitted || value.trim() === submitted) { localStorage.removeItem(`${scope}:text`); return ''; } return value; }); });
-      }}><label>和 Agent 讨论目标与路线<textarea maxLength={2000} value={text} onChange={event => changeText(event.target.value)} placeholder="例如：为什么先学这个？我只有两小时，想多做实践。"/></label>
-        <button disabled={!canTalk || !text.trim()}>发送消息</button><p className="muted small">发送会调用模型。可以随时提问，不必先回答卡片问题。</p>
-        {dirty.current && <p className="hint">摘要有本地编辑，请先确认或放弃编辑，再继续对话。输入不会被刷新覆盖。</p>}
-      </form>}
+      }} maxLength={2000} placeholder="例如：为什么先学这个？我只有两小时，想多做实践。" submitLabel="发送消息" disabled={!canTalk || !text.trim()}
+        note={<><span>发送会调用模型。可以随时提问，不必先回答卡片问题。</span>{dirty.current && <p className="hint">摘要有本地编辑，请先确认或放弃编辑，再继续对话。输入不会被刷新覆盖。</p>}</>}>
+        <span>目标与路线对话</span>
+      </MessageComposer>}
     </section>
     {sidebarTarget ? createPortal(currentPlan, sidebarTarget) : null}</div>
   </div>;

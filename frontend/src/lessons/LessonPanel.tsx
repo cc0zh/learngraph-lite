@@ -102,7 +102,7 @@ function Stepper({ lesson, component, tasks, session, inlineExplanation, sourceL
     catch (e) { setError(`步骤仅在本地更新，尚未保存：${String(e)}`); }
     finally { setSaving(false); }
   }
-  return <><div className="lesson-step"><p className="eyebrow">步骤 {step + 1} / {component.props.steps.length}</p><h3>{current.title}</h3><LessonMarkdown>{current.description}</LessonMarkdown>{current.slots.text && <LessonMarkdown>{current.slots.text}</LessonMarkdown>}</div>
+  return <><div className="lesson-step"><h3>{current.title}</h3><p className="scope-label">步骤 {step + 1} / {component.props.steps.length}</p><LessonMarkdown>{current.description}</LessonMarkdown>{current.slots.text && <LessonMarkdown>{current.slots.text}</LessonMarkdown>}</div>
     <div className="lesson-actions"><button className="quiet" disabled={readonly(lesson) || saving || step === 0} onClick={() => { void change(step - 1); }}>上一步</button>
       <button className="secondary" disabled={readonly(lesson) || saving || step === component.props.steps.length - 1} onClick={() => { void change(step + 1); }}>下一步</button>
       <button className="quiet" disabled={readonly(lesson) || saving} onClick={() => { void change(0); }}>重置步骤</button>

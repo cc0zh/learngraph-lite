@@ -27,7 +27,8 @@ function App() {
     return () => { window.removeEventListener('popstate', update); document.removeEventListener('click', links); };
   }, []);
   const learning = workbenchHref({ tool: undefined, document: undefined, chunk: undefined, source_goal: undefined, source_node: undefined });
-  return <><a className="skip" href="#main">跳到主要内容</a><header className="topbar"><a className="brand" href={learning}><span className="logo">L</span>LearnGraph <small>LITE</small></a><nav><a href={learning}>我的学习</a><a href={workbenchHref({ tool: 'documents', mode: undefined, document: undefined, chunk: undefined })}>我的资料</a><span className={`model-badge ${model?.mode === 'real' ? 'real' : ''}`}>{model ? model.mode === 'fixture' ? 'Fixture · 示例模式' : model.configured ? 'Real · 模型已配置' : 'Real · 未配置' : '正在检查模型'}</span></nav></header>
+  const documentTool = ['documents', 'document'].includes(new URLSearchParams(location.search).get('tool') || '');
+  return <><a className="skip" href="#main">跳到主要内容</a><header className="topbar"><a className="brand" href={learning}><span className="brand-name">LearnGraph</span><small>Lite</small><span className="brand-description">让知识相连，让学习继续</span></a><nav aria-label="主要导航"><a href={learning} aria-current={!documentTool ? 'page' : undefined}>我的学习</a><a href={workbenchHref({ tool: 'documents', mode: undefined, document: undefined, chunk: undefined })} aria-current={documentTool ? 'page' : undefined}>我的资料</a><span className={`model-badge ${model?.mode === 'real' ? 'real' : ''}`}>{model ? model.mode === 'fixture' ? 'Fixture · 示例模式' : model.configured ? 'Real · 模型已配置' : 'Real · 未配置' : '正在检查模型'}</span></nav></header>
     <main id="main"><ErrorBox error={error}/>{location.pathname === '/' ? <Workbench/> : <p>页面不存在。<a href="/">返回工作台</a></p>}</main></>;
 }
 createRoot(document.getElementById('root')!).render(<App/>);
