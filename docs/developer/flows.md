@@ -1,10 +1,31 @@
 # 关键调用链：从用户动作到可恢复的业务结果
 
+本页帮助你回答：一次用户动作经过哪些层、在哪里真正写入、响应丢失后怎样恢复、用哪些测试验证。只想先理解使用过程，请从[核心机制总览](../core/index.md)进入；本页保留函数级追踪，不把摘要当作完整协议。
+
+## 按动作选择调用链
+
+| 用户动作 | 调用链入口 |
+| --- | --- |
+| 创建目标、审核草稿并发布 | [规划与发布](#规划与发布路径) |
+| 节点对话、出题、交卷与查看建议 | [教学与作答](#教学与作答路径) |
+| 阅读学习包、记录交互并追问 | [学习包与解释](#学习包与解释路径) |
+| 上传、绑定资料与打开引用 | [资料与引用](#资料与引用路径) |
+| 接受或拒绝已发布图谱的变更 | [提案审核](#提案审核路径) |
+| 查询 run、接收 SSE、取消与恢复 | [运行与恢复](#正常执行与流式读取) |
+
 阅读约定：下文后端简写路径相对 `src/learngraph_lite/`，前端和测试使用仓库根路径。每条链按执行顺序列出函数、协议转换、提交点和失败边界；测试名称是可定位的契约证据，**不是本页宣称已重新执行或真实模型验收通过**。当前结论只维护在[质量与验收](../QUALITY_SCORE.md)。
 
 贯穿例子：目标 G 是“学习 RAG 检索”，图谱节点为 `chunking → retrieval`；用户在 retrieval 开会话 S，生成题 E、包 L，检索资料 D。G/S/E/L/D 是可读占位名，实际创建身份按[领域概念](concepts.md)的 UUID/作用域规则生成。目录责任见[架构与源码地图](architecture.md)。
 
 ## 1. 从一句意图到用户审核发布
+
+```text
+学习意图 → 目标草稿 → 用户确认
+                         ↓
+              图谱草稿 → 用户审核发布
+```
+
+**先抓住三件事：**Agent 只提出草稿，确认和发布由用户决定；目标与图谱状态分别保存；发布响应丢失先查询，初次发布与学习初始化不是一个原子事务。使用说明见[目标规划与图谱审核](../core/planning.md)。
 
 ### 规划与发布路径
 
@@ -33,6 +54,14 @@
 
 ## 2. 从节点教学到正式作答与推荐
 
+```text
+开始节点对话 → 教学与正式出题
+                         ↓ 用户交卷
+              程序判分 → 掌握度与建议
+```
+
+**先抓住三件事：**浏览节点不改绑对话；题目和成绩属于节点，聊天属于会话；只有有效正式作答计分，不由模型或阅读次数决定。使用说明见[节点教学、练习与掌握度](../core/learning.md)。
+
 ### 教学与作答路径
 
 1. **选择节点不等于开始学习。** `Workbench.tsx` 的浏览状态只改变右侧显示；用户点开始学习才执行 `startLearning → create`，POST `/api/conversations` 保存绑定 G/retrieval 的 S，再由 `initialRun` 发首条 teaching。后端 `http.py::create_conversation → ConversationService.create` 校验已确认目标、已发布图谱、节点和客户端 UUID。
@@ -60,6 +89,14 @@
 
 ## 3. 学习包生成、事件 ACK 与独立解释
 
+```text
+学习包 → 组件交互 → 保存事件 ACK
+                         ↓ 请求解释
+              服务端构造输入 → 独立任务
+```
+
+**先抓住三件事：**学习包使用固定组件；ACK 保存交互但不计成绩；解释基于持久事件建立任务，失败需要显式重试，不能换请求 ID 绕过去重。使用说明见[学习包与交互解释](../core/lessons.md)。
+
 ### 学习包与解释路径
 
 1. `frontend/src/lessons/LessonPanel.tsx::LessonPanelContent.generate` 请求节点 lessons；`http.py::generate_lesson` 建 lesson run，经 bootstrap 的 `generate_lesson` direct handler 到 `application/lesson_generation.py::GenerateLesson.generate`。teaching 的 `create_lesson` 也进入同一用例。
@@ -82,6 +119,14 @@
 - `frontend/tests/lessons.spec.ts`：ACK/解释响应丢失、步骤身份、旧列表淘汰、历史反馈与各自产物 C1；`frontend/tests/workbench.spec.ts`：跨会话解释隔离。
 
 ## 4. 从上传资料到引用原文
+
+```text
+上传解析 → 显式绑定 → 范围内检索
+                         ↓ 保存来源
+              点击引用 → 复验与原文定位
+```
+
+**先抓住三件事：**上传不自动绑定，节点不自动继承所有目标资料；引用编号归属各自产物；定位验证来源身份和内容，不证明原文语义支持结论。使用说明见[资料检索与引用](../core/documents.md)。
 
 ### 资料与引用路径
 
@@ -110,6 +155,14 @@
 
 ## 5. 已发布图谱的提案审核
 
+```text
+Agent 提案 → pending → 用户审核
+                         ↓ 接受并校验版本
+              原子更新提案 / 图谱 / 学习快照
+```
+
+**先抓住三件事：**模型不能决定提案；过期提案不能覆盖新图谱；接受时保留历史，内容版本变化后重算当前统计。响应丢失先只读核对，不自动重复决定。使用说明见[图谱审核机制](../core/planning.md#谁决定-保存什么)。
+
 ### 提案审核路径
 
 1. teaching 的 `LearningContext.prepare` 内 `propose_graph_change` 直接调用 `GraphProposalService.create`（`application/proposals.py`）；`frontend/src/proposals/ProposalPanel.tsx` 的生成按钮则经 `http.py::generate_proposal` 建 proposal run，由 `application/proposal_generation.py::GenerateProposal.generate` 调同一创建用例。兼容手工 HTTP `http.py::create_proposal` 也能提交结构化操作。三者只保存 pending，模型候选生成和 repair 都在事务外，不改已发布图谱。
@@ -131,6 +184,14 @@
 - `frontend/tests/proposals.spec.ts`：接受响应丢失只读核对、pending/拒绝和过期冲突。
 
 ## 6. run、SSE、取消与刷新恢复
+
+```text
+保存请求身份 → run 准入 → 执行并保存状态
+                              ↓
+                   GET / SSE 读取当前结果
+```
+
+**先抓住三件事：**刷新只读，不自动调用模型；结果不确定时恢复原请求，明确失败后才关联原任务重试；公开取消不代表阻塞调用已退出，也不代表业务从未提交。机制说明见[Agent 执行、取消与恢复](../core/agent-loop.md)。
 
 ### 正常执行与流式读取
 

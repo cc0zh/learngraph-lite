@@ -181,7 +181,7 @@ mini-learngraph4/
 
 ## 文档导航
 
-新加入项目？从[开发者文档总览](docs/index.md)开始，按“首次运行 → 核心概念 → 架构链路 → 第一次改动”阅读。同一份 Markdown 可通过本地文档站浏览：`npm.cmd run docs:dev`，打开 <http://127.0.0.1:4173>；不需要启动 API 或配置模型。维护与构建见[文档维护指南](docs/developer/documentation.md)。
+新加入项目？从[文档总览](docs/index.md)选择“先跑起来”“理解核心机制”或“修改与验证功能”；按能力查询可直接进入[核心机制总览](docs/core/index.md)，需要实现细节再读领域概念与架构链路。同一份 Markdown 可通过本地文档站浏览：`npm.cmd run docs:dev`，打开 <http://127.0.0.1:4173>；不需要启动 API 或配置模型。维护与构建见[文档维护指南](docs/developer/documentation.md)。
 
 | 文档 | 适合什么时候看 |
 | --- | --- |

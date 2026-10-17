@@ -10,7 +10,7 @@ const excluded = readdirSync(repository).filter((name) => name !== 'docs' && !ro
 export default defineConfig({
   lang: 'zh-CN',
   title: 'LearnGraph Lite',
-  description: '从第一次启动到第一次业务改动的开发者指南',
+  description: '从首次运行、理解核心机制到修改与验证功能',
   // Only official Markdown is a page input. Never scan application source,
   // dependencies, local databases/evidence or generated output for pages.
   srcDir: '../',
@@ -43,35 +43,45 @@ export default defineConfig({
   themeConfig: {
     siteTitle: 'LearnGraph Lite / 文档',
     nav: [
-      { text: '开发入门', link: '/developer/getting-started' },
-      { text: '架构与链路', link: '/developer/architecture' },
+      { text: '开始使用', link: '/developer/getting-started' },
+      { text: '核心机制', link: '/core/' },
+      { text: '参与开发', link: '/developer/architecture' },
       { text: '参考手册', link: '/api-guide' },
     ],
     sidebar: [
-      { text: '开发者指南', items: [
+      { text: '开始使用', items: [
         { text: '文档总览', link: '/' },
         { text: '安装与首次运行', link: '/developer/getting-started' },
         { text: '运行模式与配置', link: '/developer/configuration' },
-        { text: '核心概念', link: '/developer/concepts' },
+        { text: '常见问题与排错', link: '/developer/troubleshooting' },
+      ] },
+      { text: '核心机制', items: [
+        { text: '机制总览', link: '/core/' },
+        { text: '目标规划与图谱审核', link: '/core/planning' },
+        { text: '节点教学、练习与掌握度', link: '/core/learning' },
+        { text: '资料检索与引用', link: '/core/documents' },
+        { text: '学习包与交互解释', link: '/core/lessons' },
+        { text: 'Agent 执行、取消与恢复', link: '/core/agent-loop' },
+        { text: '应用 Agent Skill', link: '/agent-skills' },
+      ] },
+      { text: '参与开发', collapsed: true, items: [
+        { text: '领域概念与状态归属', link: '/developer/concepts' },
         { text: '架构与源码地图', link: '/developer/architecture' },
         { text: '关键业务链路', link: '/developer/flows' },
         { text: '第一次业务改动', link: '/developer/change-guide' },
         { text: '测试与验证', link: '/developer/testing' },
-        { text: '常见问题与排错', link: '/developer/troubleshooting' },
-      ] },
-      { text: '机制与参考', items: [
-        { text: 'API 手册', link: '/api-guide' },
-        { text: '应用 Agent Skill', link: '/agent-skills' },
-        { text: '架构详细参考', link: '/ARCHITECTURE' },
-        { text: '恢复与可靠性', link: '/RELIABILITY' },
-        { text: '质量与验收', link: '/QUALITY_SCORE' },
-        { text: '已知技术债', link: '/exec-plans/tech-debt-tracker' },
-      ] },
-      { text: '参与与维护', collapsed: true, items: [
         { text: '贡献指南', link: '/CONTRIBUTING' },
         { text: '编码纪律', link: '/CODING_BEHAVIOR' },
         { text: 'CI/CD', link: '/CICD' },
         { text: '文档维护', link: '/developer/documentation' },
+      ] },
+      { text: '参考手册', collapsed: true, items: [
+        { text: 'API 手册', link: '/api-guide' },
+        { text: '架构详细参考', link: '/ARCHITECTURE' },
+        { text: '恢复与可靠性', link: '/RELIABILITY' },
+        { text: '安全约束', link: '/SECURITY' },
+        { text: '质量与验收', link: '/QUALITY_SCORE' },
+        { text: '已知技术债', link: '/exec-plans/tech-debt-tracker' },
       ] },
     ],
     outline: { level: [2, 3], label: '本页内容' },

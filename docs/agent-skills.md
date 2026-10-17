@@ -2,6 +2,14 @@
 
 Skill 是可按需加载的流程指南，不是新 Agent、业务资料、权限或可执行插件。规划与节点学习共用一套加载机制，沿用原来的 AgentLoop / AgentRunner。
 
+## 本页解决什么问题
+
+- 模型怎样按需选择 Skill，用户怎样显式指定？
+- 如何新增指南，它适用于哪些交互模式？
+- Skill 为什么不能扩大工具权限或代替业务校验？
+
+执行与恢复的整体流程见[Agent 机制](core/agent-loop.md)，其他能力见[核心机制总览](core/index.md)。
+
 ## 当前支持
 
 - real 和业务 fixture app factory 默认从 `src/learngraph_lite/skills/` 加载启动快照；独立 echo fixture 不加载。
